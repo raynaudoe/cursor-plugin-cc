@@ -1,12 +1,12 @@
 {
   "name": "cursor",
   "version": "0.3.2",
-  "description": "Hand off tasks from Claude Code to cursor-agent. Composer-optimised.",
+  "description": "Use Cursor CLI from Claude Code to review code or delegate rescue work.",
   "author": {
     "name": "Tomas Grasl",
     "url": "https://www.tomasgrasl.cz/"
   },
-  "homepage": "https://github.com/freema/cursor-plugin-cc",
-  "repository": "https://github.com/freema/cursor-plugin-cc",
+  "homepage": "https://github.com/raynaudoe/cursor-plugin-cc",
+  "repository": "https://github.com/raynaudoe/cursor-plugin-cc",
   "license": "MIT"
 }

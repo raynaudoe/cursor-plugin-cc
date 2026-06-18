@@ -34,6 +34,7 @@ export async function repoRoot(cwd = process.cwd()) {
 
 const MAX_DIFF_BYTES = 256 * 1024;
 const MAX_UNTRACKED_BYTES = 32 * 1024;
+const MAX_INLINE_FILES = 2;
 // The well-known SHA of git's empty tree — diffing against it makes a repo
 // with no commits (no resolvable HEAD) show its staged files as additions.
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -113,6 +114,10 @@ function section(title, body) {
   return `## ${title}\n\n${trimmed ? trimmed : '(none)'}\n`;
 }
 
+function changedFilesSection(files) {
+  return files.length === 0 ? '(none)' : files.join('\n');
+}
+
 function capDiff(diff, maxBytes) {
   if (Buffer.byteLength(diff, 'utf8') <= maxBytes) return { text: diff, truncated: false };
   const slice = Buffer.from(diff, 'utf8').subarray(0, maxBytes).toString('utf8');
@@ -166,6 +171,8 @@ function untrackedSection(cwd, files) {
  * @property {string} [body]       Markdown diff context for the prompt.
  * @property {string[]} [changedFiles]
  * @property {boolean} [truncated]
+ * @property {'inline-diff'|'self-collect'} [inputMode]
+ * @property {string} [collectionGuidance]
  * @property {boolean} [isEmpty]   True when there is nothing to review.
  * @property {string} [error]      Set when the target could not be resolved.
  */
@@ -181,6 +188,7 @@ export async function collectReviewContext(cwd, opts = {}) {
   const scope = opts.scope ?? 'auto';
   const base = opts.base ?? null;
   const maxDiffBytes = opts.maxDiffBytes ?? MAX_DIFF_BYTES;
+  const maxInlineFiles = opts.maxInlineFiles ?? MAX_INLINE_FILES;
   const branch = await currentBranch(cwd);
 
   let mode;
@@ -220,17 +228,20 @@ export async function collectReviewContext(cwd, opts = {}) {
     const ref = await diffBase(cwd);
     const status = (await git(cwd, ['status', '--short', '--untracked-files=all'])).stdout.trim();
     const stat = (await git(cwd, ['diff', '--stat', ref])).stdout.trim();
-    const { text: diff, truncated } = capDiff(
-      (await git(cwd, ['diff', '--no-ext-diff', ref])).stdout,
-      maxDiffBytes,
-    );
+    const rawDiff = (await git(cwd, ['diff', '--no-ext-diff', ref])).stdout;
+    const { text: diff, truncated } = capDiff(rawDiff, maxDiffBytes);
+    const includeDiff = changedFiles.length <= maxInlineFiles && !truncated;
     const body = [
       section('Status', status),
       section('Diff stat', stat),
-      section(
-        ref === 'HEAD' ? 'Diff (tracked files vs HEAD)' : 'Diff (tracked files, no commits yet)',
-        diff + (truncated ? '\n\n…[diff truncated — inspect the remaining files read-only]…' : ''),
-      ),
+      includeDiff
+        ? section(
+            ref === 'HEAD'
+              ? 'Diff (tracked files vs HEAD)'
+              : 'Diff (tracked files, no commits yet)',
+            diff,
+          )
+        : section('Changed files', changedFilesSection(changedFiles)),
       section('Untracked files', untrackedSection(cwd, st.untracked)),
     ].join('\n');
     return {
@@ -239,6 +250,10 @@ export async function collectReviewContext(cwd, opts = {}) {
       body,
       changedFiles,
       truncated,
+      inputMode: includeDiff ? 'inline-diff' : 'self-collect',
+      collectionGuidance: includeDiff
+        ? 'Use the inline diff below as primary evidence.'
+        : 'The context below is a lightweight summary. Inspect the target diff yourself with read-only git commands before finalizing.',
       isEmpty: false,
     };
   }
@@ -259,17 +274,15 @@ export async function collectReviewContext(cwd, opts = {}) {
     await git(cwd, ['log', '--oneline', '--no-decorate', `${baseRef}..HEAD`])
   ).stdout.trim();
   const stat = (await git(cwd, ['diff', '--stat', range])).stdout.trim();
-  const { text: diff, truncated } = capDiff(
-    (await git(cwd, ['diff', '--no-ext-diff', range])).stdout,
-    maxDiffBytes,
-  );
+  const rawDiff = (await git(cwd, ['diff', '--no-ext-diff', range])).stdout;
+  const { text: diff, truncated } = capDiff(rawDiff, maxDiffBytes);
+  const includeDiff = changedFiles.length <= maxInlineFiles && !truncated;
   const body = [
     section('Commits', log),
     section('Diff stat', stat),
-    section(
-      `Diff (${range})`,
-      diff + (truncated ? '\n\n…[diff truncated — inspect the remaining files read-only]…' : ''),
-    ),
+    includeDiff
+      ? section(`Diff (${range})`, diff)
+      : section('Changed files', changedFilesSection(changedFiles)),
   ].join('\n');
   return {
     mode,
@@ -278,6 +291,10 @@ export async function collectReviewContext(cwd, opts = {}) {
     body,
     changedFiles,
     truncated,
+    inputMode: includeDiff ? 'inline-diff' : 'self-collect',
+    collectionGuidance: includeDiff
+      ? 'Use the inline diff below as primary evidence.'
+      : 'The context below is a lightweight summary. Inspect the target diff yourself with read-only git commands before finalizing.',
     isEmpty: false,
   };
 }

@@ -4,7 +4,7 @@ This file is the contract any agent (Claude Code, Cursor, Codex, …) must follo
 
 ## What this repo is
 
-A Claude Code plugin that delegates coding tasks from Claude to the Cursor CLI (`cursor-agent`). Nine slash commands under the `cursor:` namespace plus a `cursor-runner` subagent. Source of truth lives under `plugins/cursor/`.
+A Claude Code plugin that uses the Cursor CLI (`cursor-agent`) for read-only reviews and delegated rescue work. Seven slash commands under the `cursor:` namespace plus a `cursor-rescue` subagent are exposed. Source of truth lives under `plugins/cursor/`.
 
 ## Hard rules
 
@@ -13,12 +13,12 @@ A Claude Code plugin that delegates coding tasks from Claude to the Cursor CLI (
 3. **Slash command scripts live under `plugins/cursor/scripts/<cmd>.mjs`.** Their wrappers at `plugins/cursor/commands/<cmd>.md` must use `node "${CLAUDE_PLUGIN_ROOT}/scripts/<cmd>.mjs" -- "$ARGUMENTS"` with quoted `$ARGUMENTS` — unquoted breaks under zsh on any prompt containing `?`, `*`, or `@`.
 4. **`Bash(node:*)` is the only permission pattern used in `allowed-tools`.** Do not invent path-based patterns — Claude Code does not expand `${CLAUDE_PLUGIN_ROOT}` inside `allowed-tools`.
 5. **Jobs are persisted under `~/.cursor-plugin-cc/jobs/<repo-hash>/`.** Never break that layout; users point scripts at those files when reporting bugs.
-6. **Language: everything in this repo is English.** Code, comments, commit messages, docs, PR bodies, issue titles. The plugin does not impose a language policy on target repos — `cursor-runner` reads target-repo conventions — but this repo itself is English-only.
-7. **Do not impose conventions on target repos.** The `cursor-runner` subagent reads `AGENTS.md` / `.cursor/rules` / existing code in whatever repo the user is working in and tells Cursor to match THAT style. When editing the subagent, do not hardcode English / Prettier / whatever.
+6. **Language: everything in this repo is English.** Code, comments, commit messages, docs, PR bodies, issue titles. The plugin does not impose a language policy on target repos — `cursor-rescue` reads target-repo conventions — but this repo itself is English-only.
+7. **Do not impose conventions on target repos.** The `cursor-rescue` subagent reads `AGENTS.md` / `.cursor/rules` / existing code in whatever repo the user is working in and tells Cursor to match THAT style. When editing the subagent, do not hardcode English / Prettier / whatever.
 
 ## Task format
 
-Every delegated task (whether you write it by hand or `/cursor:from-plan` generates it) uses five sections in this order:
+Every delegated rescue task should use five sections in this order:
 
 1. **Goal** — one sentence.
 2. **Repo context** — stack + pointer to AGENTS.md / `.cursor/rules` / conventions file.
@@ -46,10 +46,11 @@ Plus a **Constraints** block that forbids: touching files outside the list, rena
 
 ## Where things live
 
-- `plugins/cursor/scripts/<cmd>.mjs` — command entrypoints (9).
-- `plugins/cursor/scripts/lib/*.mjs` — shared helpers (run, id, args, paths, jobs, parse, cursor, git, invoked, plan).
+- `plugins/cursor/scripts/<cmd>.mjs` — command entrypoints (7) and thin wrappers around `cursor-companion.mjs`.
+- `plugins/cursor/scripts/cursor-companion.mjs` — unified runtime for setup, review, adversarial review, rescue, status, result, cancel, and background workers.
+- `plugins/cursor/scripts/lib/*.mjs` — shared helpers (run, id, args, paths, jobs, parse, cursor, git, invoked, md).
 - `plugins/cursor/commands/*.md` — slash command wrappers.
-- `plugins/cursor/agents/cursor-runner.md` — the handoff subagent prompt.
+- `plugins/cursor/agents/cursor-rescue.md` — the handoff subagent prompt.
 - `plugins/cursor/tests/*.test.mjs` — vitest specs + fixtures.
 - `.claude-plugin/marketplace.json` — what Claude Code's `/plugin install` reads.
 

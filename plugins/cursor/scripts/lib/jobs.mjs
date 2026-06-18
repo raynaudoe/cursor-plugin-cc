@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { ensureDir, jobsDir, logsDir } from './paths.mjs';
 
 /**
- * @typedef {'running'|'done'|'failed'|'cancelled'} JobStatus
+ * @typedef {'queued'|'running'|'completed'|'failed'|'cancelled'|'done'} JobStatus
  */
 
 /**
@@ -23,14 +23,22 @@ import { ensureDir, jobsDir, logsDir } from './paths.mjs';
  * @property {string=} cursorChatId
  * @property {number=} pid
  * @property {JobStatus} status
+ * @property {string=} kind
+ * @property {string=} kindLabel
+ * @property {'review'|'task'|'setup'|string=} jobClass
+ * @property {string=} title
+ * @property {string=} phase
  * @property {number=} exitCode
  * @property {string} startedAt
  * @property {string=} finishedAt
+ * @property {string=} completedAt
  * @property {string} rawLogPath
  * @property {string=} summary
+ * @property {string=} resultText
  * @property {string[]=} filesTouched
  * @property {boolean=} background
  * @property {boolean=} cloud
+ * @property {Record<string, unknown>=} request
  */
 
 /**
@@ -41,6 +49,14 @@ import { ensureDir, jobsDir, logsDir } from './paths.mjs';
  * @property {string} model
  * @property {boolean=} background
  * @property {boolean=} cloud
+ * @property {JobStatus=} status
+ * @property {string=} kind
+ * @property {string=} kindLabel
+ * @property {'review'|'task'|'setup'|string=} jobClass
+ * @property {string=} title
+ * @property {string=} phase
+ * @property {string=} summary
+ * @property {Record<string, unknown>=} request
  */
 
 /**
@@ -76,6 +92,40 @@ function atomicWrite(target, data) {
 }
 
 /**
+ * @param {unknown} status
+ * @returns {'queued'|'running'|'completed'|'failed'|'cancelled'}
+ */
+export function normalizeStatus(status) {
+  if (
+    status === 'queued' ||
+    status === 'running' ||
+    status === 'failed' ||
+    status === 'cancelled'
+  ) {
+    return status;
+  }
+  if (status === 'done' || status === 'completed') return 'completed';
+  return 'running';
+}
+
+/**
+ * @param {unknown} record
+ * @returns {JobRecord|null}
+ */
+export function normalizeJobRecord(record) {
+  if (!record || typeof record !== 'object' || typeof record.id !== 'string') return null;
+  const normalized = {
+    ...record,
+    status: normalizeStatus(record.status),
+  };
+  if (normalized.finishedAt && !normalized.completedAt)
+    normalized.completedAt = normalized.finishedAt;
+  if (normalized.completedAt && !normalized.finishedAt)
+    normalized.finishedAt = normalized.completedAt;
+  return normalized;
+}
+
+/**
  * @param {CreateJobInit} init
  * @returns {JobRecord}
  */
@@ -88,11 +138,18 @@ export function createJob(init) {
     repoPath: init.repoPath,
     prompt: init.prompt,
     model: init.model,
-    status: 'running',
+    status: normalizeStatus(init.status ?? 'running'),
     startedAt: new Date().toISOString(),
     rawLogPath: rawLogPath(init.repoPath, init.id),
     ...(init.background ? { background: true } : {}),
     ...(init.cloud ? { cloud: true } : {}),
+    ...(init.kind ? { kind: init.kind } : {}),
+    ...(init.kindLabel ? { kindLabel: init.kindLabel } : {}),
+    ...(init.jobClass ? { jobClass: init.jobClass } : {}),
+    ...(init.title ? { title: init.title } : {}),
+    ...(init.phase ? { phase: init.phase } : {}),
+    ...(init.summary ? { summary: init.summary } : {}),
+    ...(init.request ? { request: init.request } : {}),
   };
   atomicWrite(jobFilePath(init.repoPath, init.id), JSON.stringify(record, null, 2));
   return record;
@@ -109,8 +166,7 @@ export function readJob(repoPath, id) {
   try {
     const raw = readFileSync(file, 'utf8');
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && typeof parsed.id === 'string') return parsed;
-    return null;
+    return normalizeJobRecord(parsed);
   } catch {
     return null;
   }
@@ -125,11 +181,19 @@ export function readJob(repoPath, id) {
 export function updateJob(repoPath, id, patch) {
   const existing = readJob(repoPath, id);
   if (!existing) return null;
-  const merged = { ...existing, ...patch };
+  const normalizedPatch = {
+    ...patch,
+    ...(patch.status ? { status: normalizeStatus(patch.status) } : {}),
+  };
+  const merged = { ...existing, ...normalizedPatch };
   // Read-modify-write is last-writer-wins; the one race we actively guard is a
   // background worker finishing (status → done/failed) AFTER the user cancelled
   // the job. A cancellation is terminal and must not be silently overwritten.
-  if (existing.status === 'cancelled' && patch.status && patch.status !== 'cancelled') {
+  if (
+    existing.status === 'cancelled' &&
+    normalizedPatch.status &&
+    normalizedPatch.status !== 'cancelled'
+  ) {
     merged.status = 'cancelled';
   }
   atomicWrite(jobFilePath(repoPath, id), JSON.stringify(merged, null, 2));
@@ -157,8 +221,10 @@ export function listJobs(repoPath, opts = {}) {
     try {
       const raw = readFileSync(join(dir, f), 'utf8');
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && typeof parsed.id === 'string')
-        records.push(parsed);
+      if (parsed && typeof parsed === 'object' && typeof parsed.id === 'string') {
+        const normalized = normalizeJobRecord(parsed);
+        if (normalized) records.push(normalized);
+      }
     } catch {
       continue;
     }
@@ -223,7 +289,7 @@ function isProcessAlive(pid) {
 export async function cancelJob(repoPath, id, graceMs = 5_000) {
   const job = readJob(repoPath, id);
   if (!job) return null;
-  if (job.status !== 'running') return job;
+  if (job.status !== 'running' && job.status !== 'queued') return job;
   // NOTE: PIDs are recycled by the OS. If the original process already exited
   // and its PID was reused, the signals below could hit an unrelated process.
   // The job dir is short-lived and pruned after 30 days, so we accept this
@@ -257,7 +323,7 @@ export async function cancelJob(repoPath, id, graceMs = 5_000) {
  * @returns {JobRecord[]}
  */
 export function findRunningJobs(repoPath) {
-  return listJobs(repoPath).filter((j) => j.status === 'running');
+  return listJobs(repoPath).filter((j) => j.status === 'queued' || j.status === 'running');
 }
 
 /**
@@ -265,6 +331,6 @@ export function findRunningJobs(repoPath) {
  * @returns {JobRecord|null}
  */
 export function mostRecentFinishedJob(repoPath) {
-  const jobs = listJobs(repoPath).filter((j) => j.status !== 'running');
+  const jobs = listJobs(repoPath).filter((j) => j.status !== 'queued' && j.status !== 'running');
   return jobs[0] ?? null;
 }

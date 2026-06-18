@@ -108,7 +108,6 @@ export async function resolveBin() {
  * @property {boolean=} resumeLatest
  * @property {boolean=} cloud
  * @property {boolean=} force              Default: true.
- * @property {boolean=} approveMcps
  */
 
 /**
@@ -118,7 +117,6 @@ export async function resolveBin() {
 export function buildArgs(opts) {
   const args = ['-p', '--output-format', 'stream-json', '--trust', '--model', opts.model];
   if (opts.force !== false) args.push('--force');
-  if (opts.approveMcps) args.push('--approve-mcps');
   if (opts.cloud) args.push('--cloud');
   if (opts.resumeChatId) args.push(`--resume=${opts.resumeChatId}`);
   else if (opts.resumeLatest) args.push('--resume');
@@ -134,7 +132,6 @@ export function buildArgs(opts) {
  * @property {boolean=} resumeLatest
  * @property {boolean=} cloud
  * @property {boolean=} force
- * @property {boolean=} approveMcps
  * @property {string=} cwd
  * @property {number=} timeoutSec
  * @property {string} logPath
