@@ -1,28 +1,12 @@
 # cursor-plugin-cc
 
-Use Cursor CLI from inside Claude Code for code reviews or to delegate rescue work to Cursor.
+Use Cursor CLI from Claude Code for reviews, two-model debates, and delegated rescue work.
 
-This plugin follows the command shape of [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc), adapted to `cursor-agent`.
+This plugin follows the command shape of [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc), adapted to `cursor-agent`. It ships as plain ESM JavaScript with zero runtime dependencies and no build step.
 
-## What You Get
+## Super Quick Start
 
-- `/cursor:review` for a normal read-only Cursor review.
-- `/cursor:adversarial-review` for a steerable challenge review.
-- `/cursor:debate` for a two-model read-only consensus debate.
-- `/cursor:rescue`, `/cursor:status`, `/cursor:result`, and `/cursor:cancel` to delegate work and manage background jobs.
-- `/cursor:setup` to check whether Cursor CLI is installed and authenticated.
-
-The plugin ships as plain ESM JavaScript with zero runtime dependencies. Claude Code runs `scripts/*.mjs` directly after `/plugin install`; no build step or runtime `npm install` is required.
-
-## Requirements
-
-- Node.js 18.18 or later.
-- `cursor-agent` on `PATH`.
-- `cursor-agent login` completed at least once, or another Cursor CLI auth method supported by your environment.
-
-## Install
-
-Preferred, from GitHub:
+Add the GitHub marketplace inside Claude Code. Claude accepts the `owner/repo` shorthand here:
 
 ```text
 /plugin marketplace add raynaudoe/cursor-plugin-cc
@@ -31,7 +15,24 @@ Preferred, from GitHub:
 /cursor:setup
 ```
 
-Local checkout:
+Try the main flows:
+
+```text
+/cursor:review
+/cursor:adversarial-review challenge the failure modes in this change
+/cursor:debate should we add this API boundary?
+/cursor:rescue investigate why the tests are failing
+```
+
+Manage background jobs:
+
+```text
+/cursor:status
+/cursor:result
+/cursor:cancel
+```
+
+Local checkout install:
 
 ```text
 /plugin marketplace add /Users/you/path/to/cursor-plugin-cc
@@ -40,131 +41,60 @@ Local checkout:
 /cursor:setup
 ```
 
-## Usage
+## Requirements
 
-### `/cursor:review`
+- Node.js 18.18 or later.
+- `cursor-agent` on `PATH`.
+- `cursor-agent login` completed at least once.
 
-Runs a normal read-only review on your current work.
+If setup reports Cursor is missing, install the CLI from <https://cursor.com/install>.
 
-By default, dirty working trees are reviewed as uncommitted changes. Clean trees fall back to a branch diff against the detected default branch. Use `--base <ref>` for an explicit branch review.
+## Commands
 
-Examples:
+| Command | What It Does | Common Examples |
+| --- | --- | --- |
+| `/cursor:review` | Read-only review of the current git work. Dirty trees use the working tree; clean trees use a branch diff. | `/cursor:review`<br>`/cursor:review --base main`<br>`/cursor:review --model opus --background` |
+| `/cursor:adversarial-review` | Read-only challenge review focused on risks, assumptions, and failure modes. Accepts focus text. | `/cursor:adversarial-review`<br>`/cursor:adversarial-review --base main challenge the retry design` |
+| `/cursor:debate` | Two Cursor models debate an issue for up to 5 rounds and store a consensus report. | `/cursor:debate should we add this API boundary?`<br>`/cursor:debate --models gemini,composer --rounds 3 evaluate this architecture` |
+| `/cursor:rescue` | Delegate investigation, a fix request, or follow-up work to Cursor. | `/cursor:rescue investigate why tests fail`<br>`/cursor:rescue --model composer fix the issue quickly`<br>`/cursor:rescue --background investigate the regression` |
+| `/cursor:status` | Show active and recent Cursor jobs for this repo. | `/cursor:status`<br>`/cursor:status <job-id> --wait` |
+| `/cursor:result` | Show the stored final output for a finished job. | `/cursor:result`<br>`/cursor:result <job-id>` |
+| `/cursor:cancel` | Cancel an active Cursor job. | `/cursor:cancel`<br>`/cursor:cancel <job-id>` |
+| `/cursor:setup` | Check Cursor CLI, auth, models, and configured MCPs. | `/cursor:setup`<br>`/cursor:setup --print-models` |
 
-```text
-/cursor:review
-/cursor:review --base main
-/cursor:review --model opus --background
-```
+## Models
 
-This command does not take custom focus text. Use `/cursor:adversarial-review` when you want to challenge a design choice or risk area.
+Pass `--model <id|alias>` to review, adversarial review, and rescue. Debate supports `--models a,b` or `--model-a <id> --model-b <id>`.
 
-### `/cursor:adversarial-review`
-
-Runs a read-only review that questions the implementation approach, tradeoffs, assumptions, and failure modes.
-
-It uses the same target selection as `/cursor:review`, including `--base <ref>` and `--scope auto|working-tree|branch`. Unlike `/cursor:review`, it accepts focus text after the flags.
-
-Examples:
-
-```text
-/cursor:adversarial-review
-/cursor:adversarial-review --base main challenge whether this retry design is safe
-/cursor:adversarial-review --model gpt --background look for race conditions
-```
-
-### `/cursor:debate`
-
-Runs a read-only two-model debate over an issue or proposal, then stores the consensus report in the Cursor job system.
-
-If you do not pass model flags, Claude asks which two Cursor models to use and recommends `gemini` + `composer`. The runtime supports `--models a,b`, `--model-a <id> --model-b <id>`, `--rounds <1..5>`, `--background`, `--wait`, and `--json`.
-
-Examples:
+Useful aliases:
 
 ```text
-/cursor:debate should we add this API boundary?
-/cursor:debate --models gemini,composer --rounds 3 evaluate this architecture
-/cursor:debate --background --model-a gemini --model-b opus compare these options
+composer
+fast
+opus
+sonnet
+gpt
+gemini
+grok
 ```
 
-Each debate uses up to 5 rounds. It stops early only after both models report consensus in the same full round. Model aliases are the same as rescue/review: `composer`/`fast`, `opus`, `sonnet`, `gpt`, `gemini`, `grok`, and any raw Cursor model id.
+Raw Cursor model ids are passed through unchanged. Run `/cursor:setup --print-models` to see what your account exposes.
 
-### `/cursor:rescue`
+## Jobs
 
-Delegates investigation, a fix request, or a follow-up task to Cursor.
-This command routes through the `cursor-rescue` subagent, which forwards the request to the shared runtime and returns Cursor's output verbatim.
-
-Examples:
-
-```text
-/cursor:rescue investigate why the tests started failing
-/cursor:rescue fix the failing test with the smallest safe patch
-/cursor:rescue --resume apply the top fix from the last run
-/cursor:rescue --model composer fix the issue quickly
-/cursor:rescue --background investigate the regression
-```
-
-Model aliases are the same as the existing Cursor integration: `composer`/`fast`, `opus`, `sonnet`, `gpt`, `gemini`, `grok`, and any raw Cursor model id.
-
-### `/cursor:status`
-
-Shows active and recent Cursor jobs for the current repository.
-
-```text
-/cursor:status
-/cursor:status <job-id>
-/cursor:status <job-id> --wait
-```
-
-The status report includes job kind, status, phase, elapsed time, Cursor chat id, summary, and follow-up actions.
-
-### `/cursor:result`
-
-Shows the stored final output for a finished Cursor job.
-
-```text
-/cursor:result
-/cursor:result <job-id>
-```
-
-When available, it includes the Cursor chat id and a `cursor-agent --resume=<chat-id>` command.
-
-### `/cursor:cancel`
-
-Cancels an active Cursor job.
-
-```text
-/cursor:cancel
-/cursor:cancel <job-id>
-```
-
-With no id, it cancels the single active job. If multiple jobs are active, pass an explicit id.
-
-### `/cursor:setup`
-
-Checks whether the local Cursor CLI is ready.
-
-```text
-/cursor:setup
-/cursor:setup --print-models
-```
-
-If Cursor is missing, install it from <https://cursor.com/install>. If Cursor is installed but not authenticated, run `cursor-agent login`.
-
-## How It Works
-
-The plugin stores job records under:
+Background jobs are stored under:
 
 ```text
 ~/.cursor-plugin-cc/jobs/<repo-hash>/
 ```
 
-Cursor still runs through:
+Cursor runs through:
 
 ```text
 cursor-agent -p --output-format stream-json --trust --model <id>
 ```
 
-Reviews and debates are guarded as read-only by prompt contract and post-flight checks: if Cursor writes files during those runs, the job is marked failed and the result tells you which files were touched.
+Reviews and debates are read-only by prompt contract and post-flight checks. If Cursor writes files during those runs, the job is marked failed and the result lists the touched files.
 
 ## Development
 
@@ -175,4 +105,4 @@ npm test
 npm run lint
 ```
 
-The shipped plugin has zero runtime dependencies. The npm dependencies are dev-only test and lint tooling.
+The npm dependencies are dev-only test and lint tooling. The installed plugin itself has zero runtime dependencies.
