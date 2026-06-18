@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Public command surface now matches the Codex companion shape.** The exposed commands are `/cursor:review`, `/cursor:adversarial-review`, `/cursor:rescue`, `/cursor:status`, `/cursor:result`, `/cursor:cancel`, and `/cursor:setup`.
-- **`/cursor:rescue` now routes through the `cursor-rescue` subagent.** This matches the Codex plugin pattern while keeping review/status/result/cancel/setup as direct script wrappers.
+- **Slash command prompts now mirror the Codex plugin style.** Prompt markdown is ported from the upstream command shape with Cursor-safe substitutions and without unsupported Codex-only controls.
+- **`/cursor:rescue` now routes through the `cursor-rescue` subagent.** This matches the Codex plugin pattern while keeping status/result/cancel/setup as direct companion-runtime calls.
+- **`/cursor:review` and `/cursor:adversarial-review` now use Codex-style command orchestration.** They stay out of the subagent path but can ask whether to wait or launch a Claude Code background task when the user does not pass `--wait` or `--background`.
+- **`cursor-rescue` now follows Codex-style background selection.** Small bounded rescues prefer foreground; complicated, open-ended, or long-running rescues may prefer background when no explicit mode is supplied.
 - **Cursor jobs now use Codex-style tracking and rendering.** A new `cursor-companion.mjs` runtime handles rescue tasks, reviews, background workers, status, result, and cancellation while preserving the existing `~/.cursor-plugin-cc/jobs/<repo-hash>/` layout.
 - **Stored Cursor results are no longer capped at 4000 characters.** Long foreground output and `/cursor:result` now preserve the full final Cursor message captured from `cursor-agent`.
 - **Marketplace identity is now generic.** The marketplace name is `cursor-plugin-cc`, so local and GitHub installs use `cursor@cursor-plugin-cc` while preserving the `/cursor:*` command namespace.

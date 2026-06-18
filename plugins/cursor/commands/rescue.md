@@ -1,27 +1,26 @@
 ---
-description: Delegate investigation, a fix request, or follow-up rescue work to Cursor.
-argument-hint: '[--background] [--wait] [--resume[=chat-id]] [--fresh] [--model <id>] [--timeout <sec>] <task...>'
+description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Cursor rescue subagent
+argument-hint: '[--background|--wait] [--resume|--fresh] [--model <id|alias>] [what Cursor should investigate, solve, or continue]'
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
 Invoke the `cursor:cursor-rescue` subagent via the `Agent` tool (`subagent_type: "cursor:cursor-rescue"`), forwarding the raw user request as the prompt.
+`cursor:cursor-rescue` is a subagent, not a skill — do not call `Skill(cursor:cursor-rescue)` (no such skill) or `Skill(cursor:rescue)` (that re-enters this command and hangs the session). The command runs inline so the `Agent` tool stays in scope; forked general-purpose subagents do not expose it.
+The final user-visible response must be Cursor's output verbatim.
 
-`cursor:cursor-rescue` is a subagent, not a skill. Do not call `Skill(cursor:cursor-rescue)` or `Skill(cursor:rescue)`.
-
-Raw user request: $ARGUMENTS
+Raw user request:
+$ARGUMENTS
 
 Execution mode:
 
 - If the request includes `--background`, run the `cursor:cursor-rescue` subagent in the background.
 - If the request includes `--wait`, run the `cursor:cursor-rescue` subagent in the foreground.
-- If neither flag is present, prefer foreground only for small, clearly bounded requests. For long-running or output-heavy work, run the subagent in the background so the user can fetch the stored output with `/cursor:result`.
-- `--background` and `--wait` are execution flags for Claude Code. Do not treat them as part of the natural-language task text.
-- Preserve `--model`, `--timeout`, `--resume`, `--resume=<chat-id>`, and `--fresh` for the subagent.
-
-Resume routing:
-
-- If the request includes `--resume`, `--resume=<chat-id>`, or `--fresh`, do not ask whether to continue. The user already chose.
-- Otherwise, before starting Cursor, check for a resumable rescue thread from this repository by running:
+- If neither flag is present, default to foreground.
+- `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
+- `--model` is a runtime-selection flag. Preserve it for the forwarded `task` call, but do not treat it as part of the natural-language task text.
+- If the request includes `--resume`, do not ask whether to continue. The user already chose.
+- If the request includes `--fresh`, do not ask whether to continue. The user already chose.
+- Otherwise, before starting Cursor, check for a resumable rescue thread from this Claude session by running:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" task-resume-candidate --json
@@ -42,8 +41,8 @@ Operating rules:
 - The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" task ...` and return that command's stdout as-is.
 - Return the Cursor companion stdout verbatim to the user.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
-- If the expected Cursor response is long, prefer a background run. Foreground subagent output still passes through Claude Code's Agent result channel and may be truncated by the host even when the plugin stores the full result.
 - Do not ask the subagent to inspect files, monitor progress, poll `/cursor:status`, fetch `/cursor:result`, call `/cursor:cancel`, summarize output, or do follow-up work of its own.
 - Leave the model unset unless the user explicitly asks for one.
-- If Cursor is missing or unauthenticated, stop and tell the user to run `/cursor:setup`.
+- Leave `--resume` and `--fresh` in the forwarded request. The subagent handles that routing when it builds the `task` command.
+- If the helper reports that Cursor is missing or unauthenticated, stop and tell the user to run `/cursor:setup`.
 - If the user did not supply a request, ask what Cursor should investigate or fix.

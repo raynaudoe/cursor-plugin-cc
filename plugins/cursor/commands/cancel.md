@@ -1,9 +1,8 @@
 ---
-description: Cancel an active Cursor job in this repository.
+description: Cancel an active background Cursor job in this repository
 argument-hint: '[job-id]'
+disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/cancel.mjs" -- "$ARGUMENTS"`
-
-Surface the cancellation result to the user. If multiple active jobs exist, forward the error and ask which id to cancel.
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" cancel "$ARGUMENTS"`
