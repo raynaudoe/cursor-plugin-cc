@@ -45,6 +45,7 @@
     "cancel": "node scripts/cancel.mjs",
     "setup": "node scripts/setup.mjs",
     "review": "node scripts/review.mjs",
+    "debate": "node scripts/debate.mjs",
     "adversarial-review": "node scripts/adversarial-review.mjs"
   },
   "devDependencies": {

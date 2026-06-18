@@ -44,6 +44,7 @@ describe('slash command surface', () => {
     expect(commands).toEqual([
       'adversarial-review.md',
       'cancel.md',
+      'debate.md',
       'rescue.md',
       'result.md',
       'review.md',
@@ -106,6 +107,20 @@ describe('slash command surface', () => {
       expect(source).toMatch(/Run in background/);
       expect(source).not.toMatch(/subagent_type|Agent|^!`node/m);
     }
+  });
+
+  it('keeps debate as a read-only two-model orchestration prompt', () => {
+    const source = readCommand('debate.md');
+    expect(source).toMatch(/disable-model-invocation: true/);
+    expect(source).toMatch(/allowed-tools: Bash\(node:\*\), AskUserQuestion/);
+    expect(source).toMatch(/AskUserQuestion/);
+    expect(source).toContain('Gemini + Composer (Recommended)');
+    expect(source).toContain('--models gemini,composer');
+    expect(source).toContain(
+      'node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" debate "$ARGUMENTS"',
+    );
+    expect(source).toMatch(/run_in_background: true/);
+    expect(source).not.toMatch(/subagent_type|Agent|Bash\(git:\*\)|^!`node/m);
   });
 
   it('routes rescue through the cursor-rescue subagent like the Codex plugin', () => {

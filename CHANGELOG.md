@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Public command surface now matches the Codex companion shape.** The exposed commands are `/cursor:review`, `/cursor:adversarial-review`, `/cursor:rescue`, `/cursor:status`, `/cursor:result`, `/cursor:cancel`, and `/cursor:setup`.
+- **Public command surface now matches the Codex companion shape plus Cursor debate.** The exposed commands are `/cursor:review`, `/cursor:adversarial-review`, `/cursor:debate`, `/cursor:rescue`, `/cursor:status`, `/cursor:result`, `/cursor:cancel`, and `/cursor:setup`.
+- **Added `/cursor:debate`.** The new command runs a read-only two-model Cursor consensus debate with model alias resolution, up to 5 rounds, early consensus stopping, background job support, and stored transcript results.
 - **Slash command prompts now mirror the Codex plugin style.** Prompt markdown is ported from the upstream command shape with Cursor-safe substitutions and without unsupported Codex-only controls.
 - **`/cursor:rescue` now routes through the `cursor-rescue` subagent.** This matches the Codex plugin pattern while keeping status/result/cancel/setup as direct companion-runtime calls.
 - **`/cursor:review` and `/cursor:adversarial-review` now use Codex-style command orchestration.** They stay out of the subagent path but can ask whether to wait or launch a Claude Code background task when the user does not pass `--wait` or `--background`.

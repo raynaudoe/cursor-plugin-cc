@@ -30,6 +30,9 @@ const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_CONTINUE_PROMPT =
   'Continue from the current Cursor chat state. Pick the next highest-value step and follow through until the task is resolved.';
+const DEFAULT_DEBATE_MODELS = ['gemini', 'composer'];
+const DEFAULT_DEBATE_ROUNDS = 5;
+const MAX_DEBATE_ROUNDS = 5;
 
 function output(value, asJson = false) {
   process.stdout.write(asJson ? `${JSON.stringify(value, null, 2)}\n` : value);
@@ -112,6 +115,7 @@ function jobKindLabel(job) {
   if (job.kindLabel) return job.kindLabel;
   if (job.kind === 'adversarial-review') return 'adversarial-review';
   if (job.jobClass === 'review') return 'review';
+  if (job.jobClass === 'debate') return 'debate';
   if (job.jobClass === 'task') return 'rescue';
   return job.kind ?? 'job';
 }
@@ -383,6 +387,222 @@ function renderStructuredReview(parsedResult, meta) {
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
+function asStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item ?? '').trim()).filter((item) => item.length > 0);
+}
+
+function uniqueStrings(items) {
+  return [...new Set(items.map((item) => String(item ?? '').trim()).filter(Boolean))];
+}
+
+function parseDebateTurn(text) {
+  const raw = stripCodeFence(text);
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { parsed: null, parseError: 'Expected a top-level JSON object.', rawOutput: text };
+    }
+    const requiredStrings = ['verdict', 'analysis', 'consensus_proposal', 'confidence_score'];
+    for (const key of requiredStrings) {
+      if (typeof parsed[key] !== 'string') {
+        return { parsed: null, parseError: `Missing string field \`${key}\`.`, rawOutput: text };
+      }
+    }
+    for (const key of ['agreements', 'disagreements', 'concessions']) {
+      if (!Array.isArray(parsed[key])) {
+        return { parsed: null, parseError: `Missing array field \`${key}\`.`, rawOutput: text };
+      }
+    }
+    if (typeof parsed.consensus_ready !== 'boolean') {
+      return {
+        parsed: null,
+        parseError: 'Missing boolean field `consensus_ready`.',
+        rawOutput: text,
+      };
+    }
+    return { parsed, parseError: null, rawOutput: text };
+  } catch (err) {
+    return {
+      parsed: null,
+      parseError: err instanceof Error ? err.message : String(err),
+      rawOutput: text,
+    };
+  }
+}
+
+function debateStancePrompt(stance) {
+  if (stance === 'for') {
+    return [
+      'SUPPORTIVE PERSPECTIVE WITH INTEGRITY',
+      '',
+      'You are tasked with advocating FOR this proposal, but with critical guardrails:',
+      '- Act in good faith and in the best interest of the questioner.',
+      '- Think deeply about whether supporting this idea is safe, sound, and passes essential requirements.',
+      '- Be direct in saying "this is a bad idea" when it truly is.',
+      '- There must be at least one compelling reason to be optimistic, otherwise do not support it.',
+      '',
+      'Your supportive analysis should identify genuine strengths, propose ways to overcome legitimate challenges, highlight synergies with existing systems, and present realistic implementation paths.',
+    ].join('\n');
+  }
+  return [
+    'CRITICAL PERSPECTIVE WITH RESPONSIBILITY',
+    '',
+    'You are tasked with critiquing this proposal, but with essential boundaries:',
+    '- Do not oppose genuinely excellent, common-sense ideas just to be contrarian.',
+    '- Acknowledge when a proposal is fundamentally sound and well-conceived.',
+    '- Identify legitimate risks, overlooked complexity, negative consequences, and simpler alternatives.',
+    '- If the idea is outstanding, say so clearly while offering constructive refinements.',
+    '',
+    'Your critical analysis should apply rigorous scrutiny to ensure quality, not undermine good ideas that deserve support.',
+  ].join('\n');
+}
+
+function debateTranscriptForPrompt(turns) {
+  if (turns.length === 0) return '(no prior turns)';
+  return turns
+    .map((turn) => {
+      const parsed = turn.parsed;
+      const body = parsed
+        ? [
+            `Verdict: ${parsed.verdict}`,
+            `Analysis: ${parsed.analysis}`,
+            `Agreements: ${asStringArray(parsed.agreements).join('; ') || '(none)'}`,
+            `Disagreements: ${asStringArray(parsed.disagreements).join('; ') || '(none)'}`,
+            `Concessions: ${asStringArray(parsed.concessions).join('; ') || '(none)'}`,
+            `Consensus proposal: ${parsed.consensus_proposal}`,
+            `Consensus ready: ${parsed.consensus_ready}`,
+            `Confidence: ${parsed.confidence_score}`,
+          ].join('\n')
+        : `Non-JSON output (${turn.parseError || 'parse failed'}):\n${turn.rawText}`;
+      return `Round ${turn.round} - ${turn.label} (${turn.model}, ${turn.stance})\n${body}`;
+    })
+    .join('\n\n---\n\n');
+}
+
+function buildDebateTurnPrompt({ issue, round, maxRounds, participant, opponent, transcript }) {
+  const phase =
+    round === 1
+      ? 'Deliver your initial stanced assessment of the issue.'
+      : 'Respond to the prior transcript, concede where appropriate, isolate remaining disagreement, and move toward consensus.';
+  return [
+    'ROLE',
+    'You are an expert technical consultant in a two-model consensus debate.',
+    'Your feedback may directly influence project decisions. Be rigorous, practical, and honest.',
+    '',
+    'PERSPECTIVE FRAMEWORK',
+    debateStancePrompt(participant.stance),
+    '',
+    'DEBATE CONTEXT',
+    `Issue: ${issue}`,
+    `Round: ${round} of ${maxRounds}`,
+    `You are: ${participant.label} (${participant.model}, ${participant.stance})`,
+    `Other model: ${opponent.label} (${opponent.model}, ${opponent.stance})`,
+    phase,
+    '',
+    'EVALUATION FRAMEWORK',
+    'Assess technical feasibility, project suitability, user value, implementation complexity, alternatives, industry perspective, and long-term implications.',
+    '',
+    'PRIOR TRANSCRIPT',
+    debateTranscriptForPrompt(transcript),
+    '',
+    'MANDATORY RESPONSE FORMAT',
+    'Return only valid JSON. Do not wrap it in markdown fences. Use this exact shape:',
+    '{"verdict":"single clear sentence","analysis":"concise rigorous assessment","agreements":["point"],"disagreements":["point"],"concessions":["point"],"consensus_proposal":"specific proposal both sides could accept or the strongest current position","consensus_ready":false,"confidence_score":"X/10 - brief justification"}',
+    '',
+    'CONSENSUS RULES',
+    '- Set consensus_ready to true only if your side can accept the consensus_proposal without hiding a material unresolved risk.',
+    '- Bad ideas must be called out regardless of stance; good ideas must be acknowledged regardless of stance.',
+    '- If consensus is not ready, state the exact blocking disagreement.',
+    '- Keep the reply under 850 tokens.',
+    '',
+    'READ-ONLY CONSTRAINTS',
+    '- Do not modify, create, delete, stage, or commit files.',
+    '- This is an advisory debate only.',
+  ].join('\n');
+}
+
+function renderList(title, items, fallback = '(none)') {
+  const lines = [title];
+  const clean = uniqueStrings(items);
+  if (clean.length === 0) lines.push(`- ${fallback}`);
+  else for (const item of clean) lines.push(`- ${item}`);
+  return lines;
+}
+
+function renderDebateTurn(turn) {
+  const lines = [`### Round ${turn.round} - ${turn.label} (${turn.model}, ${turn.stance})`, ''];
+  if (!turn.parsed) {
+    lines.push(`Non-JSON output preserved. Parse error: ${turn.parseError || 'unknown'}`, '');
+    lines.push('```text', String(turn.rawText ?? '').trim(), '```');
+    return lines;
+  }
+  lines.push(`Verdict: ${turn.parsed.verdict}`);
+  lines.push(`Confidence: ${turn.parsed.confidence_score}`);
+  lines.push(`Consensus ready: ${turn.parsed.consensus_ready ? 'yes' : 'no'}`, '');
+  lines.push(turn.parsed.analysis, '');
+  lines.push(...renderList('Agreements:', asStringArray(turn.parsed.agreements)));
+  lines.push('', ...renderList('Disagreements:', asStringArray(turn.parsed.disagreements)));
+  lines.push('', ...renderList('Concessions:', asStringArray(turn.parsed.concessions)));
+  lines.push('', 'Consensus proposal:', '', turn.parsed.consensus_proposal);
+  return lines;
+}
+
+function renderDebateReport({ request, turns, consensusReached, warnings = [] }) {
+  const parsedTurns = turns.filter((turn) => turn.parsed);
+  const finalRound = turns.length ? Math.max(...turns.map((turn) => turn.round)) : 0;
+  const finalTurns = turns.filter((turn) => turn.round === finalRound);
+  const finalParsed = finalTurns.map((turn) => turn.parsed).filter(Boolean);
+  const agreements = uniqueStrings(finalParsed.flatMap((turn) => asStringArray(turn.agreements)));
+  const disagreements = uniqueStrings(
+    finalParsed.flatMap((turn) => asStringArray(turn.disagreements)),
+  );
+  const concessions = uniqueStrings(finalParsed.flatMap((turn) => asStringArray(turn.concessions)));
+  const proposal =
+    finalParsed
+      .map((turn) => String(turn.consensus_proposal ?? '').trim())
+      .find((value) => value.length > 0) || '(no consensus proposal captured)';
+  const lines = [
+    '# Cursor Debate Consensus',
+    '',
+    `Issue: ${request.debate.issue}`,
+    `Models: ${request.debate.participants.map((p) => `${p.label}=${p.model}`).join(', ')}`,
+    `Rounds used: ${finalRound} of ${request.debate.maxRounds}`,
+    `Consensus: ${consensusReached ? 'reached' : 'not reached'}`,
+    '',
+    'Final recommendation:',
+    '',
+    proposal,
+    '',
+    ...renderList('Key agreements:', agreements),
+    '',
+    ...renderList('Remaining disagreements:', disagreements),
+    '',
+    ...renderList('Concessions:', concessions),
+    '',
+    'Next steps:',
+  ];
+  if (consensusReached) {
+    lines.push('- Treat the consensus proposal as the decision candidate.');
+    lines.push('- Validate the proposal against repo constraints before implementation.');
+  } else {
+    lines.push('- Decide explicitly on the unresolved disagreements before implementation.');
+    lines.push('- Use the strongest shared ground above as the minimum defensible position.');
+  }
+  if (parsedTurns.length !== turns.length) {
+    lines.push('- Review non-JSON transcript entries before relying on the summary.');
+  }
+  if (warnings.length > 0) {
+    lines.push('', '[plugin post-flight]');
+    for (const warning of warnings) lines.push(`- ${warning}`);
+  }
+  lines.push('', '## Transcript');
+  for (const turn of turns) {
+    lines.push('', ...renderDebateTurn(turn));
+  }
+  return `${lines.join('\n').trimEnd()}\n`;
+}
+
 function buildReviewPrompt({ context, adversarial = false, focusText = '' }) {
   if (!adversarial) {
     return [
@@ -444,11 +664,15 @@ function buildReviewPrompt({ context, adversarial = false, focusText = '' }) {
 
 function postFlightWarnings(summary, request) {
   const warnings = [];
-  if (request.jobClass === 'review' && summary.filesTouched.length > 0) {
+  if (
+    (request.jobClass === 'review' || request.jobClass === 'debate') &&
+    summary.filesTouched.length > 0
+  ) {
+    const label = request.jobClass === 'debate' ? 'debate' : 'review';
     warnings.push(
-      `This was a read-only review, but Cursor touched ${summary.filesTouched.length} file(s): ${summary.filesTouched.join(
+      `This was a read-only ${label}, but Cursor touched ${summary.filesTouched.length} file(s): ${summary.filesTouched.join(
         ', ',
-      )}. Inspect your working tree; the reviewer should not have written anything.`,
+      )}. Inspect your working tree; Cursor should not have written anything.`,
     );
   }
   return warnings;
@@ -534,6 +758,183 @@ async function runCursorRequest(root, jobId, request) {
   return { result, summary, status, chatId, warnings, resultText };
 }
 
+async function runDebateRequest(root, jobId, request) {
+  const logPath = rawLogPathFor(root, jobId);
+  ensureDir(jobsDir(root));
+  ensureDir(logsDir(root));
+  updateJob(root, jobId, {
+    status: 'running',
+    phase: 'starting debate',
+    pid: process.pid,
+    model: request.model,
+  });
+
+  const participants = request.debate?.participants;
+  if (!Array.isArray(participants) || participants.length !== 2) {
+    throw new Error('Debate jobs require exactly two model participants.');
+  }
+
+  const turns = [];
+  const warnings = [];
+  const filesTouched = [];
+  const chatIds = [];
+  let consensusReached = false;
+  let exitCode = 0;
+  let killed = false;
+
+  for (let round = 1; round <= request.debate.maxRounds; round += 1) {
+    const roundStart = turns.length;
+    for (let index = 0; index < participants.length; index += 1) {
+      const stored = readJob(root, jobId);
+      if (stored?.status === 'cancelled') {
+        warnings.push('The debate was cancelled before completion.');
+        const resultText = renderDebateReport({ request, turns, consensusReached, warnings });
+        updateJob(root, jobId, {
+          status: 'cancelled',
+          exitCode: 1,
+          completedAt: nowIso(),
+          finishedAt: nowIso(),
+          phase: 'cancelled',
+          summary: 'Cursor debate cancelled.',
+          resultText,
+          filesTouched: uniqueStrings(filesTouched),
+        });
+        return {
+          result: { exitCode: 1, events: [], killed },
+          summary: {
+            summary: resultText,
+            filesTouched: uniqueStrings(filesTouched),
+            exitReason: 'cancelled',
+            success: false,
+          },
+          status: 'cancelled',
+          chatId: chatIds[chatIds.length - 1],
+          warnings,
+          resultText,
+          turns,
+          consensusReached,
+        };
+      }
+
+      const participant = participants[index];
+      const opponent = participants[index === 0 ? 1 : 0];
+      updateJob(root, jobId, {
+        phase: `round ${round}: ${participant.label}`,
+        summary: `Round ${round}: ${participant.label}`,
+      });
+
+      const result = await runHeadless({
+        prompt: buildDebateTurnPrompt({
+          issue: request.debate.issue,
+          round,
+          maxRounds: request.debate.maxRounds,
+          participant,
+          opponent,
+          transcript: turns,
+        }),
+        model: participant.model,
+        force: true,
+        timeoutSec: request.timeoutSec,
+        logPath,
+        onEvent: (ev) => {
+          const chatId = ev.chat_id ?? ev.chatId ?? ev.session_id ?? ev.sessionId;
+          if (typeof chatId === 'string' && chatId.length > 0) {
+            updateJob(root, jobId, { cursorChatId: chatId });
+          }
+        },
+      });
+
+      const summary = summariseEvents(result.events);
+      const chatId = extractChatId(result.events);
+      const parsedResult = parseDebateTurn(summary.summary);
+      const turnWarnings = postFlightWarnings(summary, request);
+      warnings.push(...turnWarnings);
+      if (result.killed) {
+        warnings.push(
+          `${participant.label} round ${round}: cursor-agent was killed before it fully exited; output may be incomplete.`,
+        );
+      }
+      if (result.exitCode !== 0 || !summary.success) {
+        warnings.push(
+          `${participant.label} round ${round}: cursor-agent exited with code ${result.exitCode} (${summary.exitReason}).`,
+        );
+      }
+
+      filesTouched.push(...summary.filesTouched);
+      if (chatId) chatIds.push(chatId);
+      if (result.exitCode !== 0 && exitCode === 0) exitCode = result.exitCode;
+      if (!summary.success && exitCode === 0) exitCode = 1;
+      killed = killed || result.killed;
+
+      turns.push({
+        round,
+        label: participant.label,
+        model: participant.model,
+        requestedModel: participant.requestedModel,
+        stance: participant.stance,
+        exitCode: result.exitCode,
+        killed: result.killed,
+        cursorChatId: chatId,
+        rawText: summary.summary,
+        parsed: parsedResult.parsed,
+        parseError: parsedResult.parseError,
+        filesTouched: summary.filesTouched,
+      });
+
+      updateJob(root, jobId, {
+        phase: `round ${round}: ${participant.label} done`,
+        summary: `${participant.label} round ${round}: ${firstLine(
+          summary.summary,
+          'Cursor debate turn finished.',
+        )}`,
+        filesTouched: uniqueStrings(filesTouched),
+        ...(chatId ? { cursorChatId: chatId } : {}),
+      });
+    }
+
+    const roundTurns = turns.slice(roundStart);
+    if (
+      roundTurns.length === participants.length &&
+      roundTurns.every((turn) => turn.parsed?.consensus_ready === true)
+    ) {
+      consensusReached = true;
+      break;
+    }
+  }
+
+  const files = uniqueStrings(filesTouched);
+  const status = exitCode === 0 && !killed && warnings.length === 0 ? 'completed' : 'failed';
+  const resultText = renderDebateReport({ request, turns, consensusReached, warnings });
+  const finalExitCode = status === 'completed' ? 0 : exitCode || 1;
+  updateJob(root, jobId, {
+    status,
+    exitCode: finalExitCode,
+    completedAt: nowIso(),
+    finishedAt: nowIso(),
+    phase: status === 'completed' ? 'done' : 'failed',
+    summary: firstLine(resultText, 'Cursor debate finished.'),
+    resultText,
+    filesTouched: files,
+    ...(chatIds.length > 0 ? { cursorChatId: chatIds[chatIds.length - 1] } : {}),
+  });
+
+  return {
+    result: { exitCode: finalExitCode, events: [], killed },
+    summary: {
+      summary: resultText,
+      filesTouched: files,
+      exitReason: status,
+      success: status === 'completed',
+    },
+    status,
+    chatId: chatIds[chatIds.length - 1],
+    warnings,
+    resultText,
+    turns,
+    consensusReached,
+  };
+}
+
 function createTrackedJob(root, request, status = 'running') {
   const jobId = newId(10);
   createJob({
@@ -572,7 +973,10 @@ function spawnWorker(root, jobId, subcommand) {
 
 async function runJobForeground(root, request, { json = false } = {}) {
   const jobId = createTrackedJob(root, request, 'running');
-  const execution = await runCursorRequest(root, jobId, request);
+  const execution =
+    request.jobClass === 'debate'
+      ? await runDebateRequest(root, jobId, request)
+      : await runCursorRequest(root, jobId, request);
   const job = readJob(root, jobId);
   const payload = { job, ...execution };
   output(json ? payload : renderStoredResult(job), json);
@@ -586,7 +990,8 @@ async function runJobWorker(root, jobId) {
   if (!job.request || typeof job.request !== 'object') {
     throw new Error(`Stored job ${jobId} is missing its request payload.`);
   }
-  await runCursorRequest(root, jobId, job.request);
+  if (job.request.jobClass === 'debate') await runDebateRequest(root, jobId, job.request);
+  else await runCursorRequest(root, jobId, job.request);
 }
 
 function queueJob(root, request, workerSubcommand, json = false) {
@@ -670,6 +1075,135 @@ async function handleReview(argv, adversarial = false) {
   }
   if (flags.background && !flags.wait) {
     return queueJob(root, request, 'review-worker', flags.json);
+  }
+  return runJobForeground(root, request, { json: flags.json });
+}
+
+function readStringFlag(flags, names) {
+  for (const name of names) {
+    const value = flags[name];
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  }
+  return undefined;
+}
+
+function hasAnyFlag(flags, names) {
+  return names.some((name) => Object.prototype.hasOwnProperty.call(flags, name));
+}
+
+function parseDebateRounds(raw) {
+  if (raw == null || raw === false) return DEFAULT_DEBATE_ROUNDS;
+  if (raw === true || raw === '') {
+    throw new Error(`--rounds must be an integer from 1 to ${MAX_DEBATE_ROUNDS}.`);
+  }
+  const rounds = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isInteger(rounds) || rounds < 1 || rounds > MAX_DEBATE_ROUNDS) {
+    throw new Error(`--rounds must be an integer from 1 to ${MAX_DEBATE_ROUNDS}.`);
+  }
+  return rounds;
+}
+
+function parseDebateModelInputs(flags) {
+  const hasCombined = hasAnyFlag(flags, ['models']);
+  const hasModelA = hasAnyFlag(flags, ['model-a', 'modelA']);
+  const hasModelB = hasAnyFlag(flags, ['model-b', 'modelB']);
+  const combined = readStringFlag(flags, ['models']);
+  const modelA = readStringFlag(flags, ['model-a', 'modelA']);
+  const modelB = readStringFlag(flags, ['model-b', 'modelB']);
+  if (hasCombined && !combined) {
+    throw new Error('Pass a value to --models, for example --models gemini,composer.');
+  }
+  if (hasModelA && !modelA) {
+    throw new Error('Pass a value to --model-a.');
+  }
+  if (hasModelB && !modelB) {
+    throw new Error('Pass a value to --model-b.');
+  }
+  if (combined && (hasModelA || hasModelB)) {
+    throw new Error('Use either --models a,b or --model-a/--model-b, not both.');
+  }
+  if (combined) {
+    const models = combined
+      .split(',')
+      .map((model) => model.trim())
+      .filter(Boolean);
+    if (models.length !== 2) {
+      throw new Error('--models must contain exactly two comma-separated model ids.');
+    }
+    return models;
+  }
+  if (modelA || modelB) {
+    if (!modelA || !modelB) {
+      throw new Error('Pass both --model-a <id> and --model-b <id>, or use --models a,b.');
+    }
+    return [modelA, modelB];
+  }
+  return DEFAULT_DEBATE_MODELS;
+}
+
+function parseDebateFlags(argv) {
+  const { positional, flags } = parseCommandInput(argv, ['background', 'wait', 'json']);
+  const requestedModels = parseDebateModelInputs(flags);
+  const resolvedModels = requestedModels.map((model) => resolveModel(model));
+  if (resolvedModels[0] === resolvedModels[1]) {
+    throw new Error('Choose two different Cursor models for the debate.');
+  }
+  return {
+    issue: positional.join(' ').trim(),
+    requestedModels,
+    resolvedModels,
+    rounds: parseDebateRounds(flags.rounds),
+    background: Boolean(flags.background),
+    wait: Boolean(flags.wait),
+    timeoutSec: parseTimeout(flags.timeout),
+    json: Boolean(flags.json),
+  };
+}
+
+function buildDebateRequest(flags) {
+  if (!flags.issue) {
+    throw new Error(
+      'Provide an issue or proposal to debate, e.g. `/cursor:debate --models gemini,composer should we add this API boundary?`.',
+    );
+  }
+  const participants = [
+    {
+      label: 'Model A',
+      requestedModel: flags.requestedModels[0],
+      model: flags.resolvedModels[0],
+      stance: 'for',
+    },
+    {
+      label: 'Model B',
+      requestedModel: flags.requestedModels[1],
+      model: flags.resolvedModels[1],
+      stance: 'against',
+    },
+  ];
+  return {
+    kind: 'debate',
+    kindLabel: 'debate',
+    jobClass: 'debate',
+    title: 'Cursor Debate',
+    initialSummary: `Debate: ${shorten(flags.issue)}`,
+    prompt: flags.issue,
+    model: flags.resolvedModels.join(','),
+    force: true,
+    timeoutSec: flags.timeoutSec,
+    debate: {
+      issue: flags.issue,
+      maxRounds: flags.rounds,
+      participants,
+    },
+  };
+}
+
+async function handleDebate(argv) {
+  const flags = parseDebateFlags(argv);
+  const root = await repoRoot(process.cwd());
+  const request = buildDebateRequest(flags);
+  if (flags.background && !flags.wait) {
+    return queueJob(root, request, 'debate-worker', flags.json);
   }
   return runJobForeground(root, request, { json: flags.json });
 }
@@ -961,6 +1495,7 @@ function printUsage() {
       '  node scripts/cursor-companion.mjs setup [--json] [--print-models]',
       '  node scripts/cursor-companion.mjs review [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <id>]',
       '  node scripts/cursor-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [--model <id>] [focus...]',
+      '  node scripts/cursor-companion.mjs debate [--models a,b|--model-a <id> --model-b <id>] [--rounds <1..5>] [--background|--wait] [issue...]',
       '  node scripts/cursor-companion.mjs task [--background] [--resume|--fresh] [--model <id>] [prompt]',
       '  node scripts/cursor-companion.mjs status [job-id] [--wait] [--all]',
       '  node scripts/cursor-companion.mjs result [job-id]',
@@ -988,11 +1523,14 @@ export async function main(rawArgv) {
       return handleReview(argv, false);
     case 'adversarial-review':
       return handleReview(argv, true);
+    case 'debate':
+      return handleDebate(argv);
     case 'task':
     case 'rescue':
       return handleTask(argv);
     case 'task-worker':
     case 'review-worker':
+    case 'debate-worker':
       return handleWorker(argv);
     case 'task-resume-candidate':
       return handleTaskResumeCandidate(argv);

@@ -27,3 +27,11 @@ export const ADVERSARIAL_JSON_FIXTURE = new URL(
   './fixtures/cursor-events/adversarial-json.ndjson',
   import.meta.url,
 ).pathname;
+export const DEBATE_CONSENSUS_FIXTURE = new URL(
+  './fixtures/cursor-events/debate-consensus.ndjson',
+  import.meta.url,
+).pathname;
+export const DEBATE_NON_JSON_FIXTURE = new URL(
+  './fixtures/cursor-events/debate-non-json.ndjson',
+  import.meta.url,
+).pathname;

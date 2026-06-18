@@ -8,6 +8,7 @@ This plugin follows the command shape of [`openai/codex-plugin-cc`](https://gith
 
 - `/cursor:review` for a normal read-only Cursor review.
 - `/cursor:adversarial-review` for a steerable challenge review.
+- `/cursor:debate` for a two-model read-only consensus debate.
 - `/cursor:rescue`, `/cursor:status`, `/cursor:result`, and `/cursor:cancel` to delegate work and manage background jobs.
 - `/cursor:setup` to check whether Cursor CLI is installed and authenticated.
 
@@ -70,6 +71,22 @@ Examples:
 /cursor:adversarial-review --base main challenge whether this retry design is safe
 /cursor:adversarial-review --model gpt --background look for race conditions
 ```
+
+### `/cursor:debate`
+
+Runs a read-only two-model debate over an issue or proposal, then stores the consensus report in the Cursor job system.
+
+If you do not pass model flags, Claude asks which two Cursor models to use and recommends `gemini` + `composer`. The runtime supports `--models a,b`, `--model-a <id> --model-b <id>`, `--rounds <1..5>`, `--background`, `--wait`, and `--json`.
+
+Examples:
+
+```text
+/cursor:debate should we add this API boundary?
+/cursor:debate --models gemini,composer --rounds 3 evaluate this architecture
+/cursor:debate --background --model-a gemini --model-b opus compare these options
+```
+
+Each debate uses up to 5 rounds. It stops early only after both models report consensus in the same full round. Model aliases are the same as rescue/review: `composer`/`fast`, `opus`, `sonnet`, `gpt`, `gemini`, `grok`, and any raw Cursor model id.
 
 ### `/cursor:rescue`
 
@@ -147,7 +164,7 @@ Cursor still runs through:
 cursor-agent -p --output-format stream-json --trust --model <id>
 ```
 
-Reviews are guarded as read-only by prompt contract and post-flight checks: if a review run writes files, the job is marked failed and the result tells you which files were touched.
+Reviews and debates are guarded as read-only by prompt contract and post-flight checks: if Cursor writes files during those runs, the job is marked failed and the result tells you which files were touched.
 
 ## Development
 

@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 // Test stub for `cursor-agent`. Emits a fixture NDJSON stream chosen by
 // the CURSOR_AGENT_STUB_FIXTURE env var, then exits.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 const argv = process.argv.slice(2);
 if (process.env.CURSOR_AGENT_STUB_ARGV_LOG) {
-  writeFileSync(process.env.CURSOR_AGENT_STUB_ARGV_LOG, JSON.stringify(argv, null, 2), 'utf8');
+  if (process.env.CURSOR_AGENT_STUB_ARGV_LOG_MODE === 'append') {
+    appendFileSync(process.env.CURSOR_AGENT_STUB_ARGV_LOG, `${JSON.stringify(argv)}\n`, 'utf8');
+  } else {
+    writeFileSync(process.env.CURSOR_AGENT_STUB_ARGV_LOG, JSON.stringify(argv, null, 2), 'utf8');
+  }
 }
 
 if (argv.includes('--version')) {
