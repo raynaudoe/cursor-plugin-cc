@@ -8,7 +8,7 @@ Report privately via [GitHub Security Advisories](https://github.com/raynaudoe/c
 
 ## Supported versions
 
-Only the latest tagged release on `main` is supported. Run `/cursor:setup --doctor` to see what you have; upgrade via `/plugin marketplace remove cursor-plugin-cc && /plugin marketplace add raynaudoe/cursor-plugin-cc && /plugin install cursor@cursor-plugin-cc && /reload-plugins`.
+Only the latest tagged release on `main` is supported. Run `/cursor:setup --doctor` to see what you have; upgrade via `/plugin marketplace remove cursor-plugin-cc && /plugin marketplace add raynaudoe/cursor-plugin-cc && /plugin install ez@cursor-plugin-cc && /reload-plugins`.
 
 ## Known trade-offs the user should understand
 

@@ -6,7 +6,7 @@
   },
   "plugins": [
     {
-      "name": "cursor",
+      "name": "ez",
       "source": "./plugins/cursor",
       "description": "Use Cursor CLI from Claude Code to review code or delegate rescue work.",
       "strict": false
