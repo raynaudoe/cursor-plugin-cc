@@ -396,39 +396,88 @@ function uniqueStrings(items) {
   return [...new Set(items.map((item) => String(item ?? '').trim()).filter(Boolean))];
 }
 
+function extractJsonObjectCandidates(text) {
+  const source = String(text ?? '');
+  const candidates = [];
+  for (let start = source.indexOf('{'); start !== -1; start = source.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < source.length; i += 1) {
+      const ch = source[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === '{') {
+        depth += 1;
+      } else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          candidates.push(source.slice(start, i + 1).trim());
+          break;
+        }
+      }
+    }
+  }
+  return candidates;
+}
+
 function parseDebateTurn(text) {
   const raw = stripCodeFence(text);
-  try {
-    const parsed = JSON.parse(raw);
+  const candidates = [raw, ...extractJsonObjectCandidates(raw).filter((value) => value !== raw)];
+  let firstError = null;
+  for (const candidate of candidates) {
+    let parsed;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch (err) {
+      firstError ??= err instanceof Error ? err.message : String(err);
+      continue;
+    }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { parsed: null, parseError: 'Expected a top-level JSON object.', rawOutput: text };
+      firstError ??= 'Expected a top-level JSON object.';
+      continue;
     }
     const requiredStrings = ['verdict', 'analysis', 'consensus_proposal', 'confidence_score'];
+    let shapeError = null;
     for (const key of requiredStrings) {
       if (typeof parsed[key] !== 'string') {
-        return { parsed: null, parseError: `Missing string field \`${key}\`.`, rawOutput: text };
+        shapeError = `Missing string field \`${key}\`.`;
+        break;
       }
+    }
+    if (shapeError) {
+      firstError ??= shapeError;
+      continue;
     }
     for (const key of ['agreements', 'disagreements', 'concessions']) {
       if (!Array.isArray(parsed[key])) {
-        return { parsed: null, parseError: `Missing array field \`${key}\`.`, rawOutput: text };
+        shapeError = `Missing array field \`${key}\`.`;
+        break;
       }
     }
+    if (shapeError) {
+      firstError ??= shapeError;
+      continue;
+    }
     if (typeof parsed.consensus_ready !== 'boolean') {
-      return {
-        parsed: null,
-        parseError: 'Missing boolean field `consensus_ready`.',
-        rawOutput: text,
-      };
+      firstError ??= 'Missing boolean field `consensus_ready`.';
+      continue;
     }
     return { parsed, parseError: null, rawOutput: text };
-  } catch (err) {
-    return {
-      parsed: null,
-      parseError: err instanceof Error ? err.message : String(err),
-      rawOutput: text,
-    };
   }
+  return {
+    parsed: null,
+    parseError: firstError ?? 'No JSON object found.',
+    rawOutput: text,
+  };
 }
 
 function debateStancePrompt(stance) {
