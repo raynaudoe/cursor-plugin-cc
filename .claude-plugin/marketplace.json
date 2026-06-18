@@ -1,12 +1,12 @@
 {
   "name": "cursor-plugin-cc",
   "owner": {
-    "name": "Cursor Plugin Maintainers",
+    "name": "ez",
     "url": "https://github.com/raynaudoe/cursor-plugin-cc"
   },
   "plugins": [
     {
-      "name": "ez",
+      "name": "cursor",
       "source": "./plugins/cursor",
       "description": "Use Cursor CLI from Claude Code to review code or delegate rescue work.",
       "strict": false

@@ -12,7 +12,8 @@ describe('slash command surface', () => {
     const marketplace = JSON.parse(readFileSync(MARKETPLACE_PATH, 'utf8'));
     const plugin = JSON.parse(readFileSync(PLUGIN_JSON_PATH, 'utf8'));
     expect(marketplace.name).toBe('cursor-plugin-cc');
-    expect(marketplace.plugins[0].name).toBe('ez');
+    expect(marketplace.owner.name).toBe('ez');
+    expect(marketplace.plugins[0].name).toBe('cursor');
     expect(plugin.name).toBe('cursor');
   });
 

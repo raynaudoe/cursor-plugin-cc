@@ -25,7 +25,7 @@ Preferred, from GitHub:
 
 ```text
 /plugin marketplace add raynaudoe/cursor-plugin-cc
-/plugin install ez@cursor-plugin-cc
+/plugin install cursor@cursor-plugin-cc
 /reload-plugins
 /cursor:setup
 ```
@@ -34,7 +34,7 @@ Local checkout:
 
 ```text
 /plugin marketplace add /Users/you/path/to/cursor-plugin-cc
-/plugin install ez@cursor-plugin-cc
+/plugin install cursor@cursor-plugin-cc
 /reload-plugins
 /cursor:setup
 ```
