@@ -74,6 +74,7 @@ Examples:
 ### `/cursor:rescue`
 
 Delegates investigation, a fix request, or a follow-up task to Cursor.
+This command routes through the `cursor-rescue` subagent, which forwards the request to the shared runtime and returns Cursor's output verbatim.
 
 Examples:
 

@@ -32,12 +32,23 @@ describe('slash command surface', () => {
     ]);
   });
 
-  it('keeps every command wrapper on Bash(node:*) and quoted arguments', () => {
+  it('keeps direct command wrappers on Bash(node:*) and quoted arguments', () => {
     for (const file of readdirSync(COMMANDS_DIR).filter((name) => name.endsWith('.md'))) {
       const source = readFileSync(join(COMMANDS_DIR, file), 'utf8');
+      if (file === 'rescue.md') continue;
       expect(source).toMatch(/allowed-tools: Bash\(node:\*\)/);
       expect(source).toMatch(/node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/.+\.mjs" -- "\$ARGUMENTS"/);
       expect(source).not.toMatch(/AskUserQuestion|Bash\(git:\*\)|Agent/);
     }
+  });
+
+  it('routes rescue through the cursor-rescue subagent like the Codex plugin', () => {
+    const source = readFileSync(join(COMMANDS_DIR, 'rescue.md'), 'utf8');
+    expect(source).toMatch(/allowed-tools: Bash\(node:\*\), AskUserQuestion, Agent/);
+    expect(source).toMatch(/subagent_type: "cursor:cursor-rescue"/);
+    expect(source).toMatch(/task-resume-candidate --json/);
+    expect(source).not.toMatch(/^!`node/m);
+    expect(source).toMatch(/Skill\(cursor:cursor-rescue\)/);
+    expect(source).toMatch(/Skill\(cursor:rescue\)/);
   });
 });
