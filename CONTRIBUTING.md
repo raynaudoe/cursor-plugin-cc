@@ -9,7 +9,7 @@ Read [`AGENTS.md`](./AGENTS.md) at the repo root — it spells out the hard rule
 ## Dev setup
 
 ```bash
-git clone https://github.com/freema/cursor-plugin-cc
+git clone https://github.com/raynaudoe/cursor-plugin-cc
 cd cursor-plugin-cc/plugins/cursor
 npm install    # installs only dev deps: vitest, eslint, prettier, @eslint/js
 npm test
@@ -34,7 +34,7 @@ Conventional-commits style:
 
 ```
 feat(browser): auto-discover localhost port from vite.config
-fix(delegate): quote $ARGUMENTS so zsh doesn't glob ?
+fix(rescue): quote $ARGUMENTS so zsh doesn't glob ?
 refactor: drop esbuild, ship .mjs directly
 docs(readme): add troubleshooting section
 ```
@@ -91,7 +91,7 @@ Tests use a stub binary that replays NDJSON fixtures. To smoke-test against the 
 
 ```bash
 CURSOR_AGENT_BIN=/path/to/cursor-agent node plugins/cursor/scripts/setup.mjs --doctor
-node plugins/cursor/scripts/delegate.mjs --no-git-check -- "write a short haiku about git"
+node plugins/cursor/scripts/rescue.mjs -- "write a short haiku about git"
 ```
 
 This spends real Cursor tokens, so keep it to trivial tasks during development.
@@ -102,7 +102,7 @@ Use the GitHub issue template. Include:
 
 - `node --version`, `cursor-agent --version`
 - Output of `/cursor:setup --doctor`
-- For `/cursor:delegate` or `/cursor:browser` failures: the job id from `/cursor:status` and the path of the raw log under `~/.cursor-plugin-cc/jobs/<hash>/logs/<id>.ndjson`.
+- For `/cursor:review`, `/cursor:adversarial-review`, or `/cursor:rescue` failures: the job id from `/cursor:status` and the path of the raw log under `~/.cursor-plugin-cc/jobs/<hash>/logs/<id>.ndjson`.
 
 ## Release flow
 

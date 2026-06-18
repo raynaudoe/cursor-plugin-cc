@@ -31,16 +31,6 @@ describe('buildArgs', () => {
     expect(args).toContain('--cloud');
     expect(args).toContain('--resume=chat_xyz');
   });
-
-  it('adds --approve-mcps when requested', () => {
-    const args = buildArgs({ prompt: 'hi', model: 'auto', approveMcps: true });
-    expect(args).toContain('--approve-mcps');
-  });
-
-  it('omits --approve-mcps by default', () => {
-    const args = buildArgs({ prompt: 'hi', model: 'auto' });
-    expect(args).not.toContain('--approve-mcps');
-  });
 });
 
 describe('resolveModel', () => {

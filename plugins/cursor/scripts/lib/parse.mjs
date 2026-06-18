@@ -202,7 +202,7 @@ export function summariseEvents(events) {
 
   const summary = finalText ?? '(no final message captured)';
   return {
-    summary: summary.slice(0, 4000),
+    summary,
     filesTouched: [...files],
     exitReason,
     success,

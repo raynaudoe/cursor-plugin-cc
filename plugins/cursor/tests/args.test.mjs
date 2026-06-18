@@ -61,9 +61,8 @@ describe('parseArgv', () => {
     expect(r.positional).toEqual(['task-text']);
   });
 
-  // Regression: resume.mjs unshifts `--resume` onto argv. Before declaring
-  // `resume` as boolean this consumed the first prompt word as chat-id,
-  // producing bogus `--resume=<word>` calls to cursor-agent.
+  // Regression: boolean resume flags with optional values must not consume
+  // the first prompt word as a chat id.
   it('--resume followed by a prompt does not eat the prompt token', () => {
     const r = parseArgv(['--resume', 'řekni', 'mi', 'něco', 'o', 'teto', 'službě'], ['resume']);
     expect(r.flags['resume']).toBe(true);

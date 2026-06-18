@@ -44,6 +44,13 @@ describe('parse', () => {
     expect(s.summary).toContain('Added src/foo.ts');
   });
 
+  it('preserves long final result text without truncating it', () => {
+    const longText = `start ${'x'.repeat(6000)} complete sentence.`;
+    const s = summariseEvents([{ type: 'result', subtype: 'success', result: longText }]);
+    expect(s.summary).toBe(longText);
+    expect(s.summary.endsWith('complete sentence.')).toBe(true);
+  });
+
   it('summarises failure stream: success=false and error reason', () => {
     const events = loadFixture(FAILURE_FIXTURE);
     const s = summariseEvents(events);

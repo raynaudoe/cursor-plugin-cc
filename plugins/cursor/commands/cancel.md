@@ -1,9 +1,8 @@
 ---
-description: Cancel an active Cursor job (SIGTERM, then SIGKILL after 5 s).
+description: Cancel an active background Cursor job in this repository
 argument-hint: '[job-id]'
+disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---
 
-!`node "${CLAUDE_PLUGIN_ROOT}/scripts/cancel.mjs" -- "$ARGUMENTS"`
-
-Surface the cancellation result to the user. If multiple running jobs exist, forward the error and ask which id to cancel.
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" cancel "$ARGUMENTS"`

@@ -15,23 +15,23 @@ export const HAPPY_FIXTURE = new URL('./fixtures/cursor-events/happy-path.ndjson
   .pathname;
 export const FAILURE_FIXTURE = new URL('./fixtures/cursor-events/failure.ndjson', import.meta.url)
   .pathname;
-export const BROWSER_HAPPY_FIXTURE = new URL(
-  './fixtures/cursor-events/browser-happy.ndjson',
-  import.meta.url,
-).pathname;
-export const BROWSER_HAPPY_NESTED_FIXTURE = new URL(
-  './fixtures/cursor-events/browser-happy-nested.ndjson',
-  import.meta.url,
-).pathname;
-export const BROWSER_FALLBACK_FIXTURE = new URL(
-  './fixtures/cursor-events/browser-fallback.ndjson',
-  import.meta.url,
-).pathname;
 export const REVIEW_HAPPY_FIXTURE = new URL(
   './fixtures/cursor-events/review-happy.ndjson',
   import.meta.url,
 ).pathname;
 export const REVIEW_VIOLATION_FIXTURE = new URL(
   './fixtures/cursor-events/review-violation.ndjson',
+  import.meta.url,
+).pathname;
+export const ADVERSARIAL_JSON_FIXTURE = new URL(
+  './fixtures/cursor-events/adversarial-json.ndjson',
+  import.meta.url,
+).pathname;
+export const DEBATE_CONSENSUS_FIXTURE = new URL(
+  './fixtures/cursor-events/debate-consensus.ndjson',
+  import.meta.url,
+).pathname;
+export const DEBATE_NON_JSON_FIXTURE = new URL(
+  './fixtures/cursor-events/debate-non-json.ndjson',
   import.meta.url,
 ).pathname;

@@ -36,17 +36,17 @@ describe('jobs registry', () => {
     const read = readJob(repo, 'job1');
     expect(read?.prompt).toBe('do it');
     const updated = updateJob(repo, 'job1', {
-      status: 'done',
+      status: 'completed',
       exitCode: 0,
       finishedAt: new Date().toISOString(),
     });
-    expect(updated?.status).toBe('done');
+    expect(updated?.status).toBe('completed');
   });
 
   it('lists jobs sorted newest first and filters by status', () => {
     createJob({ id: 'a', repoPath: repo, prompt: 'a', model: 'x' });
     createJob({ id: 'b', repoPath: repo, prompt: 'b', model: 'x' });
-    updateJob(repo, 'a', { status: 'done', finishedAt: new Date().toISOString() });
+    updateJob(repo, 'a', { status: 'completed', finishedAt: new Date().toISOString() });
     const all = listJobs(repo);
     expect(all.length).toBe(2);
     const running = listJobs(repo, { status: 'running' });
@@ -88,10 +88,16 @@ describe('jobs registry', () => {
     expect(res).toBeNull();
   });
 
-  it('cancelJob on already-finished job returns unchanged record', async () => {
+  it('normalizes legacy done jobs to completed', () => {
     createJob({ id: 'done1', repoPath: repo, prompt: 'p', model: 'm' });
     updateJob(repo, 'done1', { status: 'done' });
+    expect(readJob(repo, 'done1')?.status).toBe('completed');
+  });
+
+  it('cancelJob on already-finished job returns unchanged record', async () => {
+    createJob({ id: 'done1', repoPath: repo, prompt: 'p', model: 'm' });
+    updateJob(repo, 'done1', { status: 'completed' });
     const res = await cancelJob(repo, 'done1');
-    expect(res?.status).toBe('done');
+    expect(res?.status).toBe('completed');
   });
 });

@@ -1,18 +1,17 @@
 {
   "name": "cursor-plugin-cc",
   "version": "0.3.2",
-  "description": "Use Cursor CLI from Claude Code to delegate coding tasks to Composer and other Cursor models.",
+  "description": "Use Cursor CLI from Claude Code to review code or delegate rescue work.",
   "type": "module",
   "license": "MIT",
   "author": {
-    "name": "Tomas Grasl",
-    "email": "tomas.grasl@metrifyr.cloud",
-    "url": "https://www.tomasgrasl.cz/"
+    "name": "ez",
+    "url": "https://github.com/raynaudoe/cursor-plugin-cc"
   },
-  "homepage": "https://github.com/freema/cursor-plugin-cc",
+  "homepage": "https://github.com/raynaudoe/cursor-plugin-cc",
   "repository": {
     "type": "git",
-    "url": "https://github.com/freema/cursor-plugin-cc.git"
+    "url": "https://github.com/raynaudoe/cursor-plugin-cc.git"
   },
   "keywords": [
     "claude-code",
@@ -39,15 +38,15 @@
     "test:coverage": "vitest run --coverage",
     "lint": "prettier --check . && eslint .",
     "format": "prettier --write .",
-    "delegate": "node scripts/delegate.mjs",
+    "companion": "node scripts/cursor-companion.mjs",
+    "rescue": "node scripts/rescue.mjs",
     "status": "node scripts/status.mjs",
     "result": "node scripts/result.mjs",
     "cancel": "node scripts/cancel.mjs",
-    "resume": "node scripts/resume.mjs",
-    "sessions": "node scripts/sessions.mjs",
     "setup": "node scripts/setup.mjs",
-    "browser": "node scripts/browser.mjs",
-    "review": "node scripts/review.mjs"
+    "review": "node scripts/review.mjs",
+    "debate": "node scripts/debate.mjs",
+    "adversarial-review": "node scripts/adversarial-review.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.16.0",

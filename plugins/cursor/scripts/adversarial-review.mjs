@@ -2,7 +2,7 @@
 import { main as companionMain } from './cursor-companion.mjs';
 
 export async function main(rawArgv) {
-  return companionMain(['setup', ...rawArgv]);
+  return companionMain(['adversarial-review', ...rawArgv]);
 }
 
 import { invokedAsScript as __isScript } from './lib/invoked.mjs';
@@ -12,7 +12,9 @@ if (invokedAsScript) {
   main(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((err) => {
-      process.stderr.write(`setup failed: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.stderr.write(
+        `adversarial-review failed: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
       process.exit(1);
     });
 }

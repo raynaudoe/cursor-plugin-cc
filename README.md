@@ -1,497 +1,108 @@
 # cursor-plugin-cc
 
-> **Claude plans. Cursor writes. Claude reviews.**
-> A Claude Code plugin that delegates coding _execution_ to Cursor's Composer — without ever leaving the Claude Code TUI.
+Use Cursor CLI from Claude Code for reviews, two-model debates, and delegated rescue work.
 
-[![CI](https://github.com/freema/cursor-plugin-cc/actions/workflows/ci.yml/badge.svg)](https://github.com/freema/cursor-plugin-cc/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%E2%89%A5%2018.18-43853d.svg)](https://nodejs.org)
-[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-7c3aed.svg)](https://claude.com/claude-code)
-[![Cursor CLI](https://img.shields.io/badge/Cursor-cursor--agent-000000.svg)](https://cursor.com)
+This plugin follows the command shape of [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc), adapted to `cursor-agent`. It ships as plain ESM JavaScript with zero runtime dependencies and no build step.
 
-![Demo: plan in Claude Code → delegate to Cursor → review the diff](docs/demo.gif)
+## Super Quick Start
 
-## Plan. Delegate. Ship.
+Add the GitHub marketplace inside Claude Code. Claude accepts the `owner/repo` shorthand here:
 
 ```text
-you ▸ /plan add a /health endpoint to our Express app that returns { status, version, uptime }
-
-claude ▸ Plan written to ~/.claude/plans/health-endpoint.md
-         (4 acceptance criteria, 3 files to touch, verify with `npm test`)
-
-you ▸ /cursor:from-plan --delegate
-
-plugin ▸ wrote tasks/20260427-1830-health-endpoint.md
-       ▸ handing off to cursor-agent (composer-2.5-fast, --force)…
-
-cursor ▸ ✓ src/routes/health.ts          (new, 24 lines)
-       ▸ ✓ src/app.ts                    (mounted route)
-       ▸ ✓ tests/health.test.ts          (new, 3 passing)
-       ▸ done in 11s · chat_id=V1StGXR8_Z
-
-you ▸ review the diff
-
-claude ▸ LGTM. Nit: hard-coded "1.0.0" — pull from package.json instead.
-
-you ▸ /cursor:resume "read version from package.json"
-
-cursor ▸ ✓ src/routes/health.ts          (1 line changed)
-       ▸ ✓ tests/health.test.ts          (assertion updated, still passing)
-       ▸ done in 4s
-```
-
-That's the whole loop. Claude does the **thinking** (plan, review). Cursor does the **typing** (file edits, tests). You stay in one TUI.
-
-**Why this is fast:** `composer-2.5-fast` is Cursor's tuned-for-CLI variant — it ships small, well-scoped changes in seconds. Claude Code spends its tokens on planning and reviewing, where thinking actually matters. Two tools, each doing what they're best at.
-
-## Install
-
-**Preferred — from GitHub:**
-
-```
-/plugin marketplace add freema/cursor-plugin-cc
-/plugin install cursor@tomas-cursor
+/plugin marketplace add raynaudoe/cursor-plugin-cc
+/plugin install cursor@cursor-plugin-cc
 /reload-plugins
 /cursor:setup
 ```
 
-**Local, for hacking on the plugin from a checkout:**
+Try the main flows:
 
-```
-/plugin marketplace add /Users/you/path/to/cursor-plugin-cc
-/plugin install cursor@tomas-cursor
-/reload-plugins
-/cursor:setup
-```
-
-> ⚠️ **Do not skip `/reload-plugins`.** Right after `/plugin install` the `/cursor:*` commands are NOT yet available — Claude Code only picks them up after a plugin reload. If you see `Unknown command: /cursor:setup`, you forgot this step — run `/reload-plugins` and try again.
-
-The plugin ships as **plain ESM JavaScript with zero runtime dependencies** — just the Node stdlib. `/plugin install` is literally all you need; no `npm install`, no build step, no `dist/` folder. Each slash command runs `node "${CLAUDE_PLUGIN_ROOT}/scripts/<cmd>.mjs"` directly from the committed source.
-
-The first `/cursor:setup` run tells you if `cursor-agent` is missing or unauthenticated. For hacking on the plugin itself (tests, lint, formatting), see [Contributing](#contributing) below.
-
-### Requirements
-
-- Node.js **≥ 18.18**
-- A Cursor account — paid for Composer models; free works with `--model auto` or other entitled models
-- `cursor-agent` on your `PATH` — install via `curl https://cursor.com/install -fsS | bash`
-- `cursor-agent login` completed at least once
-
-## The flow — three commands, end to end
-
-This is the entire happy path. Three commands inside Claude Code:
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  1.  /plan <what you want>                                       │
-│      → Claude drafts a plan into ~/.claude/plans/<slug>.md       │
-│        (the approval dialog appears — you can ignore it,         │
-│         the plan file is already on disk)                        │
-├──────────────────────────────────────────────────────────────────┤
-│  2.  /cursor:from-plan --delegate                                │
-│      → plugin reads the newest plan from ~/.claude/plans/        │
-│      → rewrites it as tasks/<YYYYMMDD-HHmm>-<slug>.md            │
-│        (Cursor-shaped: Goal / Context / Acceptance / Files /     │
-│         How to verify / Guardrails)                              │
-│      → invokes `cursor-agent -p --force` with prompt:            │
-│        "Implement the task in @tasks/…. Follow every section."   │
-│      → Cursor reads the @path, writes the code, reports back     │
-├──────────────────────────────────────────────────────────────────┤
-│  3.  <your verify command>     e.g. `npm test`, `task test`,     │
-│                                     `pnpm test <name>`           │
-│      → confirm the change is green                               │
-└──────────────────────────────────────────────────────────────────┘
+```text
+/cursor:review
+/cursor:adversarial-review challenge the failure modes in this change
+/cursor:debate should we add this API boundary?
+/cursor:rescue investigate why the tests are failing
 ```
 
-What lives where after a run:
+Manage background jobs:
 
-| Path | Written by | Purpose |
-| ---- | ---------- | ------- |
-| `~/.claude/plans/<slug>.md` | Claude (plan mode) | Source of truth for the plan |
-| `tasks/<YYYYMMDD-HHmm>-<slug>.md` | This plugin | Cursor-shaped contract — **commit this** |
-| `<your source files>` | Cursor | The actual code change |
-
-**Iterate:** if Claude's review of the diff finds something, just run `/cursor:resume "fix X"` — same Cursor chat, no replanning. For a fresh slice, run `/cursor:from-plan --delegate` again with a new plan, or `/cursor:delegate "<task>"` directly without plan mode.
-
-**Skip plan mode** for quick one-shots: `/cursor:delegate "<task description>"` skips steps 1–2 and goes straight to Cursor with whatever string you give it. Good for small, obvious work where a plan would be overkill.
-
-## What you get
-
-Ten slash commands under the `cursor:` namespace:
-
-- **`/cursor:delegate`** — hand a coding task to Cursor, foreground or background.
-- **`/cursor:from-plan`** — turn a Claude Code plan (from plan mode) into a `tasks/<file>.md` and hand it off to Cursor.
-- **`/cursor:review`** — read-only code review of your git diff by a Cursor model. Reports findings; never edits files.
-- **`/cursor:browser`** — verify a URL / flow in a real browser via Cursor's `chrome-devtools` MCP.
-- **`/cursor:status`** — list recent jobs or inspect a specific one.
-- **`/cursor:result`** — print the final output of a finished job.
-- **`/cursor:cancel`** — terminate a running job (SIGTERM, then SIGKILL after 5 s).
-- **`/cursor:resume`** — continue the previous Cursor chat with a follow-up.
-- **`/cursor:sessions`** — list Cursor's own chat sessions for this repo.
-- **`/cursor:setup`** — health-check the CLI, list models + configured MCPs, or guide installation.
-
-Plus a `cursor-runner` subagent you can invoke from inside Claude to delegate well-scoped tasks automatically.
-
-## Why this plugin
-
-Short answer: **Composer is genuinely good at most day-to-day coding work** — and I don't want a pile of terminal windows to drive it. I want Claude Code to be the orchestrator for everything. The flow that keeps working for me is simple: **Claude makes the plan, Composer executes it, Claude reviews the diff.** Two tools, each doing what it is best at.
-
-"Why not do the whole thing inside Cursor, then?" Claude Code has a certain magic, particularly around planning. It is not purely about the underlying model — it is the whole rig (long-context sessions, subagents, the TUI, the way tools compose) that, in my experience, only really clicks inside Claude Code.
-
-Cursor CLI has its own plan mode and it is fine, but execution is where Cursor really shines: file edits, applying diffs, crunching through a well-scoped task list in force mode. Cursor 2 and the Composer models are heavily tuned for exactly that CLI use-case. (The same is true of Codex and GPT on OpenAI's side, which is why [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc) exists — and which is what I borrowed from heavily when building this plugin. Credit where due.)
-
-So: Claude plans, Cursor writes, Claude reviews, repeat. Glued together by seven slash commands and one subagent.
-
-## A second opinion: `/cursor:review`
-
-The core loop stays **Claude plans, Cursor writes, Claude reviews** — that is where Claude Code earns its keep. But sometimes you want a _second_ reviewer on the same diff: a different model with a fresh perspective, or a deeper pass from `gpt`/`opus`/`gemini` while Claude keeps its context for orchestration. That is what `/cursor:review` is for.
-
-It is modelled on [`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc)'s `/codex:review`, adapted to the Cursor CLI: the plugin collects the git diff itself (working tree or branch vs a base), hands it to a Cursor model with a strict **review-only** prompt, and returns the findings verbatim. It never edits your files — a post-flight check fails the job if the run touches the working tree, so a review can't quietly turn into an edit. See [`/cursor:review`](#cursorreview-flags-focus) under Usage for flags and examples.
-
-## Usage
-
-### `/cursor:delegate <task...>`
-
-Hand a coding task to `cursor-agent -p …`.
-
-| Flag                   | Default                    | Effect                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--model <id>`         | `auto` (or `$CURSOR_PLUGIN_CC_DEFAULT_MODEL`) | Aliases → real Cursor ids: `composer`/`fast` → `composer-2.5-fast`, `composer-full` → `composer-2.5`, `sonnet` → `claude-4.6-sonnet-medium`, `opus` → `claude-opus-4-7-high`, `gpt`/`codex` → `gpt-5.3-codex`, `grok` → `grok-4.3`, `gemini` → `gemini-3.1-pro`, `auto` → `auto`. Unknown or retired ids (e.g. `composer-2`, `composer-2-fast`) are forwarded as-is. `auto` lets Cursor pick whatever model your account is entitled to — safe if you don't have a Composer seat. Run `/cursor:setup --print-models` for the live list. |
-| `--background`         | off                        | Detach; the command returns a job id immediately.                                                                                                                                                                                                                                                                                                              |
-| `--wait`               | on (if not `--background`) | Block until finished.                                                                                                                                                                                                                                                                                                                                          |
-| `--fresh`              | off                        | Start a brand-new Cursor session (no resume).                                                                                                                                                                                                                                                                                                                  |
-| `--resume[=<chat-id>]` | off                        | Resume a prior chat. With no id, resume the latest for this repo.                                                                                                                                                                                                                                                                                              |
-| `--no-force`           | `--force` is ON            | Disable auto-approve (paranoid mode).                                                                                                                                                                                                                                                                                                                          |
-| `--cloud`              | off                        | Pass `-c` to cursor-agent.                                                                                                                                                                                                                                                                                                                                     |
-| `--timeout <sec>`      | `1800`                     | Kill the job if it exceeds this.                                                                                                                                                                                                                                                                                                                               |
-| `--no-git-check`       | off                        | Allow running outside a git repo.                                                                                                                                                                                                                                                                                                                              |
-
-Examples:
-
-```
-/cursor:delegate add a dark-mode toggle to the settings page
-/cursor:delegate --model composer "write jest tests for utils/date.ts"
-/cursor:delegate --background --model auto "migrate user repository to Doctrine 3"
-/cursor:delegate --resume "continue with the failing edge case"
-```
-
-### `/cursor:from-plan [plan-name] [--delegate] [--model <id>] [--background] [--list]`
-
-Takes a Claude Code **plan file** (anything written under `~/.claude/plans/` by Claude's plan mode) and rewrites it as a Cursor-shaped task file under `tasks/<YYYYMMDD-HHmm>-<slug>.md`. The task file has the standard five sections (Goal, Repo context, Acceptance criteria, Files to touch, How to verify) plus a guardrail block — exactly the shape the `cursor-runner` subagent enforces — and a link back to the source plan.
-
-Two modes:
-
-- **Preview + hand-back** (default): writes the task file, prints the exact `/cursor:delegate @tasks/…` command to run next. Lets you review the task before any Cursor tokens get spent.
-- **Auto-delegate** (`--delegate` / `--yes`): writes the task file AND invokes `/cursor:delegate` in one go. Use when you already trust the plan.
-
-Examples:
-
-```
-# Plan mode first — Claude drops the plan under ~/.claude/plans/<slug>.md
-# when you exit plan mode. Then:
-
-/cursor:from-plan                       # newest plan → tasks/ → print delegate command
-/cursor:from-plan dark-mode             # match on a plan name fragment
-/cursor:from-plan --delegate            # newest plan → tasks/ → delegate immediately
-/cursor:from-plan --delegate --model opus --background "some-slug"
-/cursor:from-plan --list                # show the 15 most recent plans
-```
-
-This is the closest thing to "plan in Claude, execute in Cursor" in one session: Claude does the thinking, Cursor does the typing, and the task file is a durable contract between the two.
-
-### `/cursor:review [flags] [focus...]`
-
-Read-only code review of your git diff by a Cursor model. The plugin collects the diff itself, embeds it in a strict review-only prompt, runs `cursor-agent` over it, and prints the findings verbatim — grouped Blocking / Should-fix / Nits with a one-line verdict. It does **not** edit files; if the run touches the working tree anyway, a post-flight check marks the job `failed` and flags it. Tracked as a normal job, so `/cursor:status`, `/cursor:result` and `/cursor:cancel` all work on it.
-
-By default it picks the target automatically: a dirty working tree is reviewed as-is; a clean tree falls back to a branch diff against the detected default branch. Any trailing text is passed as a reviewer **focus**.
-
-| Flag                                 | Default           | Effect                                                                                             |
-| ------------------------------------ | ----------------- | ------------------------------------------------------------------------------------------------- |
-| `--base <ref>`                       | auto              | Review the branch diff `<ref>...HEAD` (merge-base) instead of the working tree.                    |
-| `--scope auto\|working-tree\|branch` | `auto`            | Force the target. `working-tree` = uncommitted changes; `branch` = vs the detected default branch. |
-| `--adversarial`                      | off               | Challenge the design and assumptions, not just implementation defects.                             |
-| `--model <id>`                       | `auto`            | Same aliases as `/cursor:delegate`. Use `gpt`/`opus`/`gemini` for a deeper review.                 |
-| `--background`                       | off               | Detach; returns a job id immediately. Read it later with `/cursor:result`.                         |
-| `--wait`                             | on                | Block until the review finishes (default unless `--background`).                                   |
-| `--timeout <sec>`                    | `1800`            | Kill the review if it exceeds this.                                                                |
-| `--no-git-check`                     | off               | Allow running outside a git repo (rarely useful — there is no diff to review).                     |
-
-Examples:
-
-```
-/cursor:review                                  # review the current working-tree diff
-/cursor:review --base main                      # review this branch vs main
-/cursor:review --scope branch --model gpt       # branch diff, deeper model
-/cursor:review --adversarial "is the retry/backoff design sound under load?"
-/cursor:review --background --model opus         # detach; /cursor:result when ready
-```
-
-This is a **second opinion**, not a replacement for Claude reviewing the diff in-session. Reach for it when you want a different model's eyes on the change, or to offload a large review while Claude keeps orchestrating.
-
-### `/cursor:browser <url> <what to verify...>`
-
-Verify a page or a flow in a **real browser** via Cursor's `chrome-devtools` MCP. This is read-only by design — Cursor navigates, interacts, checks console/network and reports back; it will not modify your source files.
-
-```
-/cursor:browser http://localhost:3000 "login flow works for valid and invalid credentials"
-/cursor:browser http://localhost:5173 "dark-mode toggle persists across reloads"
-/cursor:browser localhost:8080 "no console errors on the home page; no 4xx/5xx requests"
-```
-
-Under the hood: the command pre-checks that `chrome-devtools` is configured in `cursor-agent mcp list`, then invokes `cursor-agent -p --approve-mcps …` with a prompt that scripts the standard flow (`list_pages → navigate → take_snapshot → interact → wait_for → console/network checks → screenshot`). No flags to remember.
-
-**Setup for this command** (one-time): add the MCP server to your Cursor MCP config, usually `~/.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
-      "args": ["-y", "chrome-devtools-mcp@latest", "--isolated"]
-    }
-  }
-}
-```
-
-Restart Cursor so `cursor-agent` picks up the new MCP. `--isolated` makes each run use a fresh Chrome profile, which sidesteps the common "profile already in use" lockout.
-
-Verify with `/cursor:setup --doctor` — it now lists every MCP `cursor-agent` can see and whether each is loaded.
-
-### `/cursor:status [job-id] [--all]`
-
-Without args, shows the last 10 jobs for this repository as a table. With an id, shows the full job record including the Cursor chat id (so you can resume manually with `cursor-agent --resume=<id>`). Pass `--all` to drop the 10-row limit.
-
-```
+```text
 /cursor:status
-/cursor:status V1StGXR8_Z
-```
-
-### `/cursor:result [job-id]`
-
-Prints the final summary of a finished job. Defaults to the most recent one for this repo.
-
-```
 /cursor:result
-/cursor:result V1StGXR8_Z
-```
-
-### `/cursor:cancel [job-id]`
-
-Cancels a running job. With no id, cancels the single running job (errors if there are several).
-
-```
 /cursor:cancel
-/cursor:cancel V1StGXR8_Z
 ```
 
-### `/cursor:resume [task...]`
+Local checkout install:
 
-Shortcut for `/cursor:delegate --resume <task...>`. Without a task, sends an empty follow-up ("continue").
-
-```
-/cursor:resume "now wire it into the App shell"
-/cursor:resume --resume=chat_abc123 "fix the failing test"
-```
-
-### `/cursor:sessions`
-
-Shells out to `cursor-agent ls` and lists Cursor's own chat sessions for this repo. If that call times out or returns empty, the plugin falls back to its local job registry.
-
-### `/cursor:setup [--doctor] [--print-models] [--install]`
-
-Runs a quick health-check. `--doctor` produces extended diagnostics (Node version, PATH, `CURSOR_API_KEY` presence masked, jobs dir writability, cursor-agent version). `--print-models` shells out to `cursor-agent --list-models`. `--install` prints the install command but **does not run it** — you must copy-paste it yourself.
-
-## The two-phase loop
-
-This plugin is built around one pattern: **Claude plans and reviews, Cursor writes code.** Treat them as two separate roles, not one pipeline:
-
-1. **Plan / spec** — Claude Code scopes the change, picks the slice to delegate, and drafts acceptance criteria. This is where architectural judgment happens.
-2. **Execute** — `/cursor:delegate` (or the `cursor-runner` subagent) hands that spec to Cursor. Cursor writes files under `--force`, fast.
-3. **Review** — Claude reads the diff Cursor produced. This is where correctness and style are checked.
-4. **Iterate** — `/cursor:resume "fix X"` for the same thread, or `/cursor:delegate --fresh` for a new slice.
-
-The plugin intentionally does not try to collapse these phases into one. Cursor is fast but context-starved; Claude has the whole session context but is slower per edit. Keeping them in separate phases is the whole point.
-
-### Writing good prompts for Cursor
-
-A good `/cursor:delegate` prompt has five sections:
-
-1. **Goal** — one sentence.
-2. **Repo context** — stack, and a pointer to whatever conventions file applies (`AGENTS.md`, `.cursor/rules`, `CLAUDE.md`).
-3. **Acceptance criteria** — 1–5 verifiable bullets.
-4. **Files to touch** — explicit list when you can predict it.
-5. **How to verify** — the exact commands (`npm test`, `task typecheck`, …) that prove the task is done.
-
-The `cursor-runner` subagent applies this template automatically. When you write `/cursor:delegate` by hand, aim for the same structure in the task string — it is the single biggest lever on Cursor's output quality.
-
-### Chunking
-
-`cursor-agent --force` will YOLO through whatever you give it. Keep slices small: **≤ 5 steps, ≤ 10 files, ≤ 2 architectural layers per `/cursor:delegate` call.** If the plan is bigger, split it — one slice per call — and let Claude review between slices.
-
-### Language and target-repo conventions
-
-The plugin codebase is English, but it does not impose a language policy on **your** repo. When the `cursor-runner` subagent prepares a prompt, it reads the target repo's `AGENTS.md` / `.cursor/rules` / existing code and tells Cursor to match that style — whether that means Czech commits, German UI strings, or anything else. Do not put "write everything in English" in your own prompts unless that is actually your repo's convention.
-
-## Typical flows
-
-**Fast parallel task.** You're in Claude Code. You want Cursor to handle something small while you keep working.
-
-```
-/cursor:delegate --background "write jest tests for src/utils/date.ts"
-# keep talking to Claude
-/cursor:result
+```text
+/plugin marketplace add /Users/you/path/to/cursor-plugin-cc
+/plugin install cursor@cursor-plugin-cc
+/reload-plugins
+/cursor:setup
 ```
 
-**Tight loop.** Delegate in the foreground, let Claude review, then iterate.
+## Requirements
 
-```
-/cursor:delegate "extract the retry logic from apiClient.ts into a hook"
-# Claude reads the diff, suggests a fix
-/cursor:resume "also add a unit test for the 429 path"
-```
+- Node.js 18.18 or later.
+- `cursor-agent` on `PATH`.
+- `cursor-agent login` completed at least once.
 
-**Escalation.** Start small, upgrade if Cursor stalls.
+If setup reports Cursor is missing, install the CLI from <https://cursor.com/install>.
 
-```
-/cursor:delegate --model composer "<task>"
-# composer gave up — retry with opus from scratch
-/cursor:delegate --model opus --fresh "<same task>"
-```
+## Commands
 
-**Resume vs fresh.** Use `--resume` (default) when the new task is the same thread of work. Use `--fresh` when the topic changed, or when the previous run went off the rails and resuming would just carry the confusion forward.
+| Command | What It Does | Common Examples |
+| --- | --- | --- |
+| `/cursor:review` | Read-only review of the current git work. Dirty trees use the working tree; clean trees use a branch diff. | `/cursor:review`<br>`/cursor:review --base main`<br>`/cursor:review --model opus --background` |
+| `/cursor:adversarial-review` | Read-only challenge review focused on risks, assumptions, and failure modes. Accepts focus text. | `/cursor:adversarial-review`<br>`/cursor:adversarial-review --base main challenge the retry design` |
+| `/cursor:debate` | Two Cursor models debate an issue for up to 5 rounds and store a consensus report. | `/cursor:debate should we add this API boundary?`<br>`/cursor:debate --models gemini,composer --rounds 3 evaluate this architecture` |
+| `/cursor:rescue` | Delegate investigation, a fix request, or follow-up work to Cursor. | `/cursor:rescue investigate why tests fail`<br>`/cursor:rescue --model composer fix the issue quickly`<br>`/cursor:rescue --background investigate the regression` |
+| `/cursor:status` | Show active and recent Cursor jobs for this repo. | `/cursor:status`<br>`/cursor:status <job-id> --wait` |
+| `/cursor:result` | Show the stored final output for a finished job. | `/cursor:result`<br>`/cursor:result <job-id>` |
+| `/cursor:cancel` | Cancel an active Cursor job. | `/cursor:cancel`<br>`/cursor:cancel <job-id>` |
+| `/cursor:setup` | Check Cursor CLI, auth, models, and configured MCPs. | `/cursor:setup`<br>`/cursor:setup --print-models` |
 
-## How I actually use this (the recipe I run every day)
+## Models
 
-The two-phase loop above is the concept; here is the concrete workflow that falls out of it in practice, and the one I keep reaching for:
+Pass `--model <id|alias>` to review, adversarial review, and rescue. Debate supports `--models a,b` or `--model-a <id> --model-b <id>`.
 
-1. **Plan in Claude Code and write a task file.** Describe what you want; ask Claude to draft a _task spec_ — a markdown file with **goal**, **acceptance criteria**, **files to touch**, and **how to verify** (the same five sections the `cursor-runner` subagent enforces). Save it under `tasks/<slug>.md` in the repo.
-2. **Hand the file to Cursor.** Run `/cursor:delegate @tasks/<slug>.md implement this`. The `@path` shorthand inlines the file contents into the prompt, so Cursor gets the full spec without Claude having to re-type it. Composer executes — it is genuinely fast, and a precisely defined task is usually a one-shot job.
-3. **Back in Claude Code: review the diff.** Approve, or iterate with `/cursor:resume "fix X"` on the same thread, or escalate with `/cursor:delegate --model opus --fresh <same task file>` if Composer stalled.
-4. **Keep the task files around.** `tasks/` becomes a little log of what the repo's delegated changes looked like. Handy when you want to re-delegate a similar slice — just copy an old file, tweak the bullets.
+Useful aliases:
 
-Why this works: Claude's tokens go into **planning and reviewing**, where thinking matters; Cursor's Composer handles **the actual typing**, where it is cheaper and faster. The task file is the contract between the two phases — if it is sloppy, no model will save you. Writing a good one is itself a skill, and it is the only skill this workflow asks of you.
-
-If you want Claude to do the whole thing automatically — draft the task file AND hand it off — that is what the `cursor-runner` subagent is for. Ask it to either "draft a task file for X" (it stops there) or "implement X via Cursor" (it drafts, hands off, and reports the diff).
-
-### Bonus: plan mode → `/cursor:from-plan` → delegate
-
-If you already used Claude Code's **plan mode** for a task (the `/plan …` flow that drops a plan file under `~/.claude/plans/<slug>.md` after you approve it), you do not need to re-type anything. Run `/cursor:from-plan` and the plugin will:
-
-1. Pick the newest plan under `~/.claude/plans/` (or the one matching a name fragment you pass).
-2. Extract the useful sections (Context → Repo context, Approach → Acceptance criteria, File list → Files to touch, Verification → How to verify), drop the dev-only bits (Effort, Risks, Scope exclusions), and add the standard guardrail block.
-3. Write the result to `tasks/<YYYYMMDD-HHmm>-<slug>.md` in the current repo and print the exact `/cursor:delegate @tasks/…` command for you to run.
-
-So the full loop is:
-
-```
-/plan add a dark-mode toggle to the settings page
-# Claude proposes a plan; you approve inside plan mode.
-/cursor:from-plan --delegate --model opus
-# Plan gets turned into a task file and handed off to Cursor in one step.
-# Back in Claude Code: review the diff, /cursor:resume "fix X" if needed.
+```text
+composer
+fast
+opus
+sonnet
+gpt
+gemini
+grok
 ```
 
-The task file stays in `tasks/` as a durable record — the contract between plan and execution. Re-running a similar slice later is a two-line diff of that file away.
+Raw Cursor model ids are passed through unchanged. Run `/cursor:setup --print-models` to see what your account exposes.
 
-## Configuration
+## Jobs
 
-| Env var                           | Purpose                                                                                                            |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `CURSOR_API_KEY`                  | Forwarded to `cursor-agent`. Optional — `cursor-agent login` is usually enough.                                    |
-| `CURSOR_AGENT_BIN`                | Override binary path (used by the test suite).                                                                     |
-| `CURSOR_PLUGIN_CC_HOME`           | Override the jobs-registry root (default `~/.cursor-plugin-cc`).                                                   |
-| `CURSOR_PLUGIN_CC_DEFAULT_MODEL`  | Default `--model` when none is passed. Accepts the same aliases as `--model` (e.g. `composer`, `opus`). Falls back to `auto`. |
+Background jobs are stored under:
 
-A repo-local `.cursor-plugin-cc.json` is on the roadmap for overriding the default model per repo; until then, set `--model` per invocation or pin `CURSOR_PLUGIN_CC_DEFAULT_MODEL` in your shell.
-
-## Moving work back to Cursor
-
-Every finished job stores the Cursor `chat_id`. Read it from `/cursor:status <job-id>` or `/cursor:result`. Then, in any terminal:
-
-```
-cursor-agent --resume=<chat_id>
+```text
+~/.cursor-plugin-cc/jobs/<repo-hash>/
 ```
 
-This re-opens the same Cursor session without going through Claude Code — handy when you want to finish something in Cursor's interactive UI.
+Cursor runs through:
 
-## FAQ
+```text
+cursor-agent -p --output-format stream-json --trust --model <id>
+```
 
-**Does it need a special Node version?** Yes — ≥ 18.18. The CI matrix tests 18.18, 20, and 22 on Linux and macOS.
+Reviews and debates are read-only by prompt contract and post-flight checks. If Cursor writes files during those runs, the job is marked failed and the result lists the touched files.
 
-**Does it use my existing Cursor auth?** Yes. The plugin shells out to your already-installed `cursor-agent`, which uses whatever session `cursor-agent login` set up (or `CURSOR_API_KEY` if you prefer).
+## Development
 
-**Does it upload my code anywhere?** No — the plugin itself runs locally. `cursor-agent` of course sends your prompts to Cursor's backend; that is Cursor's normal behaviour, not something this plugin changes.
+```bash
+cd plugins/cursor
+npm install
+npm test
+npm run lint
+```
 
-**What does `--force` do?** It is Cursor's auto-approve (aka `--yolo`). With it on, Cursor writes files without asking each time. This is necessary for non-interactive use but means Cursor can touch your working tree freely. Use `--no-force` if you want to test against an interactive flow — but note that most headless invocations will hang waiting for approval, so `--no-force` is really only useful for debugging.
-
-**The model list doesn't match what I see in Cursor.** Run `/cursor:setup --print-models` — that shells out to `cursor-agent --list-models` and shows exactly what your account supports. The alias table in the plugin is a convenience; Cursor's actual model IDs drift over time.
-
-**`cursor-agent` hangs after finishing a task.** Known quirk of the print-mode CLI. The plugin has a 5-second watchdog that SIGTERMs the process after a `result` event if it hasn't self-exited, then SIGKILLs 5 seconds later.
-
-## Troubleshooting
-
-Things that bit users (and us) during development, with the exact fix each time.
-
-### `Unknown command: /cursor:setup`
-
-You skipped `/reload-plugins`. Claude Code only picks up newly-installed plugin commands after a reload — `/plugin install` alone is not enough. Run `/reload-plugins` and the commands appear.
-
-### `Shell command failed for pattern ... no matches found: review?`
-
-Zsh globbing on `?` or `*` in your prompt. This should not happen in `v0.2.0+` because every command wrapper quotes `"$ARGUMENTS"`. If you see it, your plugin is outdated — reinstall: `/plugin marketplace remove tomas-cursor && /plugin marketplace add freema/cursor-plugin-cc && /plugin install cursor@tomas-cursor && /reload-plugins`.
-
-### `Error: Cannot find module '.../dist/<cmd>.js'` or `'.../scripts/<cmd>.mjs'`
-
-Stale plugin cache from an older version. Same fix as above: remove marketplace, re-add, re-install, reload.
-
-### `Shell command permission check failed for pattern "!node ..."`
-
-First-time Bash permission prompt. Approve `node` for this session (Claude Code asks once per session; the approval covers all plugin commands since all of them invoke `node`). If you denied it accidentally, `/permissions` lets you review/change.
-
-### `/cursor:browser` says "The run never called the `chrome-devtools` MCP"
-
-The MCP server is not loaded in the current `cursor-agent` process. Three common causes:
-
-1. **Not approved.** Run `cursor-agent mcp enable chrome-devtools` (or use `--approve-mcps` which `/cursor:browser` already passes).
-2. **Not configured in `~/.cursor/mcp.json`.** Add the entry the error message suggests, including `--isolated` in the args to avoid Chrome profile lockouts.
-3. **Cursor not restarted after editing `mcp.json`.** Cursor caches MCP config at startup; a restart is required.
-
-Verify with `/cursor:setup --doctor` → the "Configured Cursor MCPs" section should list `chrome-devtools` with status `loaded` (or at least `approved`).
-
-### `/cursor:from-plan` says "no plan files found"
-
-Claude Code only writes plan files when you explicitly enter plan mode and then exit it with approval. If you never did that, there is nothing to convert. Enter plan mode (`/plan ...`) first; run `/cursor:from-plan --list` afterwards to confirm the file is there.
-
-### `cursor-agent` hangs mid-run
-
-Usually Cursor's backend, not us. The plugin has a default 30-minute timeout (`--timeout 1800`). For long tasks, bump it with `--timeout 3600`. For stuck jobs, `/cursor:cancel <id>` — SIGTERM with a 5 s grace window, then SIGKILL.
-
-### `/cursor:delegate` prints `Error: current directory is not a git repository`
-
-Safety check: by default the plugin refuses to run outside a git repo so Cursor cannot modify an unversioned tree. Pass `--no-git-check` if you know what you are doing.
-
-### Logs and raw output
-
-Every job writes its full `cursor-agent` NDJSON stream to `~/.cursor-plugin-cc/jobs/<repo-hash>/logs/<job-id>.ndjson`. When reporting bugs, include the first ~50 lines of the relevant log (after scrubbing anything sensitive).
-
-## Contributing
-
-Plugin users can skip this section — there is nothing to build.
-
-Contributors, read [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the dev setup, branch naming, the "how to add a new slash command" recipe, and the release flow. The hard rules (zero runtime deps, no build step, etc.) live in [`AGENTS.md`](./AGENTS.md) — the same file `cursor-runner` tells Cursor to read before touching any repo. Reporting a vulnerability? See [`SECURITY.md`](./SECURITY.md).
-
-CI runs `npm test` and `npm run lint` on every PR across Node 18.18 / 20 / 22 on Ubuntu + macOS. No direct pushes to `main` — branch protection enforces PR review.
-
-## Roadmap
-
-Things that are **not** in 0.1.0 but on the list:
-
-- **Additional browser MCPs** — right now `/cursor:browser` hard-codes `chrome-devtools` as the MCP name. Planned: a `--mcp <name>` flag plus autodiscovery so any DevTools-style MCP works. First follow-up target: Mozilla's [firefox-devtools-mcp](https://github.com/mozilla/firefox-devtools-mcp).
-- **Per-repo defaults** — a `.cursor-plugin-cc.json` at repo root to override default model, timeout and MCP preference without re-typing flags.
-- **npm publish** — once the API stabilises, ship a tarball so users can `/plugin install cursor@tomas-cursor` without a `cd plugins/cursor && npm install` step.
-
-Contributions and ideas welcome.
-
-## License
-
-MIT — see [LICENSE](./LICENSE). See also [NOTICE](./NOTICE).
+The npm dependencies are dev-only test and lint tooling. The installed plugin itself has zero runtime dependencies.
