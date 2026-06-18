@@ -4,11 +4,11 @@
 
 If you find a security issue — credential leak, command injection, path traversal, anything that lets a malicious input do something the user did not intend — please **do not open a public issue**.
 
-Report privately via [GitHub Security Advisories](https://github.com/raynaudoe/cursor-plugin-cc/security/advisories/new) or by email to `tomas.grasl@metrifyr.cloud`. Expect a response within a week. Once a fix is merged we will publish an advisory with credit (unless you prefer anonymity).
+Report privately via [GitHub Security Advisories](https://github.com/raynaudoe/cursor-plugin-cc/security/advisories/new). Expect a response within a week. Once a fix is merged we will publish an advisory with credit (unless you prefer anonymity).
 
 ## Supported versions
 
-Only the latest tagged release on `main` is supported. Run `/cursor:setup --doctor` to see what you have; upgrade via `/plugin marketplace remove tomas-cursor && /plugin marketplace add raynaudoe/cursor-plugin-cc && /plugin install cursor@tomas-cursor && /reload-plugins`.
+Only the latest tagged release on `main` is supported. Run `/cursor:setup --doctor` to see what you have; upgrade via `/plugin marketplace remove cursor-plugin-cc && /plugin marketplace add raynaudoe/cursor-plugin-cc && /plugin install cursor@cursor-plugin-cc && /reload-plugins`.
 
 ## Known trade-offs the user should understand
 

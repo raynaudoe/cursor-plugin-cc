@@ -5,9 +5,8 @@
   "type": "module",
   "license": "MIT",
   "author": {
-    "name": "Tomas Grasl",
-    "email": "tomas.grasl@metrifyr.cloud",
-    "url": "https://www.tomasgrasl.cz/"
+    "name": "Cursor Plugin Maintainers",
+    "url": "https://github.com/raynaudoe/cursor-plugin-cc"
   },
   "homepage": "https://github.com/raynaudoe/cursor-plugin-cc",
   "repository": {

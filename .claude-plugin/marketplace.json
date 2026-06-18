@@ -1,8 +1,8 @@
 {
-  "name": "tomas-cursor",
+  "name": "cursor-plugin-cc",
   "owner": {
-    "name": "Tomas Grasl",
-    "url": "https://www.tomasgrasl.cz/"
+    "name": "Cursor Plugin Maintainers",
+    "url": "https://github.com/raynaudoe/cursor-plugin-cc"
   },
   "plugins": [
     {
