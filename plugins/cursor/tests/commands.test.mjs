@@ -119,6 +119,12 @@ describe('slash command surface', () => {
     expect(source).toContain(
       'node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" debate "$ARGUMENTS"',
     );
+    expect(source).toContain(
+      'If neither `--wait` nor `--background` is present, still run the debate in the foreground and wait for all turns to finish.',
+    );
+    expect(source).toContain(
+      'Never set `run_in_background: true` unless the raw arguments literally include `--background`.',
+    );
     expect(source).toMatch(/run_in_background: true/);
     expect(source).not.toMatch(/subagent_type|Agent|Bash\(git:\*\)|^!`node/m);
   });

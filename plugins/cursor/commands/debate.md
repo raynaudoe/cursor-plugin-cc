@@ -28,26 +28,30 @@ Model selection:
 
 Execution mode:
 
+- Foreground is mandatory unless the raw arguments literally include `--background`.
 - If the raw arguments include `--wait`, run the debate in the foreground.
-- If the raw arguments include `--background`, launch the debate with `Bash` in the background.
-- If neither flag is present, default to foreground.
+- If neither `--wait` nor `--background` is present, still run the debate in the foreground and wait for all turns to finish.
+- Do not infer background execution from task size, complexity, expected duration, or number of rounds. A debate has a bounded round count; wait for the final consensus report.
+- Only if the raw arguments literally include `--background`, launch the debate with `Bash` in the background.
+- Never set `run_in_background: true` unless the raw arguments literally include `--background`.
 - Preserve `--rounds`, `--json`, and the issue text exactly.
 - The runtime defaults to 5 maximum rounds and rejects values outside `1..5`.
 
 Foreground flow:
 
-- Run:
+- Run a normal foreground `Bash` call. Do not set `run_in_background`.
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" debate "$ARGUMENTS"
 ```
 
-- Return the command stdout verbatim, exactly as-is.
+- Wait for the command to finish. Return the command stdout verbatim, exactly as-is.
 - Do not paraphrase, summarize, or add commentary before or after it.
 - Do not fix any issues mentioned in the debate output.
 
 Background flow:
 
+- This flow is only allowed when the raw arguments literally include `--background`.
 - Launch the debate with `Bash` in the background:
 
 ```typescript
