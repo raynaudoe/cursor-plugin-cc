@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildArgs, resolveModel, runHeadless } from '../scripts/lib/cursor.mjs';
+import { MODEL_ALIASES, buildArgs, resolveModel, runHeadless } from '../scripts/lib/cursor.mjs';
 import { extractChatId, summariseEvents } from '../scripts/lib/parse.mjs';
 import { HAPPY_FIXTURE, STUB_BIN, makeTempHome } from './helpers.mjs';
 
@@ -41,18 +41,15 @@ describe('resolveModel', () => {
   });
 
   it('maps aliases to real Cursor ids', () => {
-    expect(resolveModel('composer')).toBe('composer-2.5-fast');
-    expect(resolveModel('composer-fast')).toBe('composer-2.5-fast');
-    expect(resolveModel('fast')).toBe('composer-2.5-fast');
-    expect(resolveModel('composer-full')).toBe('composer-2.5');
-    expect(resolveModel('composer-2.5')).toBe('composer-2.5');
-    expect(resolveModel('composer-2.5-fast')).toBe('composer-2.5-fast');
-    expect(resolveModel('sonnet')).toBe('claude-4.6-sonnet-medium');
-    expect(resolveModel('opus')).toBe('claude-opus-4-7-high');
-    expect(resolveModel('gpt')).toBe('gpt-5.3-codex');
-    expect(resolveModel('grok')).toBe('grok-4.3');
-    expect(resolveModel('grok-build')).toBe('grok-build-0.1');
-    expect(resolveModel('gemini')).toBe('gemini-3.1-pro');
+    for (const [alias, model] of Object.entries(MODEL_ALIASES)) {
+      expect(resolveModel(alias)).toBe(model);
+    }
+  });
+
+  it('maps aliases case-insensitively after trimming', () => {
+    expect(resolveModel(' Gemini ')).toBe(MODEL_ALIASES.gemini);
+    expect(resolveModel('COMPOSER')).toBe(MODEL_ALIASES.composer);
+    expect(resolveModel('OpUs')).toBe(MODEL_ALIASES.opus);
   });
 
   it('keeps retired Composer ids as passthrough for older cursor-agent builds', () => {

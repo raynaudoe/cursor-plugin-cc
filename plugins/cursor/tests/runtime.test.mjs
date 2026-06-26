@@ -7,6 +7,7 @@ import { main as companionMain } from '../scripts/cursor-companion.mjs';
 import { main as debateMain } from '../scripts/debate.mjs';
 import { main as rescueMain } from '../scripts/rescue.mjs';
 import { main as reviewMain } from '../scripts/review.mjs';
+import { MODEL_ALIASES } from '../scripts/lib/cursor.mjs';
 import { createJob, listJobs, updateJob } from '../scripts/lib/jobs.mjs';
 import {
   ADVERSARIAL_JSON_FIXTURE,
@@ -307,6 +308,33 @@ describe('cursor companion runtime', () => {
     const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
     expect(argv).toContain('--model');
     expect(argv).toContain('composer-2.5-fast');
+  });
+
+  it('rescue forwards every configured model alias to cursor-agent', async () => {
+    initRepo(tmp.dir);
+    const argvLog = join(tmp.dir, 'rescue-model-aliases.ndjson');
+    process.env.CURSOR_AGENT_STUB_ARGV_LOG = argvLog;
+    process.env.CURSOR_AGENT_STUB_ARGV_LOG_MODE = 'append';
+    const aliases = Object.entries(MODEL_ALIASES);
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      for (const [alias] of aliases) {
+        const code = await rescueMain(['--model', alias, '--', `check ${alias} routing`]);
+        expect(code).toBe(0);
+      }
+    } finally {
+      outSpy.mockRestore();
+    }
+
+    const invocations = readFileSync(argvLog, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(invocations).toHaveLength(aliases.length);
+
+    const forwardedModels = invocations.map((argv) => argv[argv.indexOf('--model') + 1]);
+    expect(forwardedModels).toEqual(aliases.map(([, model]) => model));
+    expect(forwardedModels).toContain(MODEL_ALIASES.gemini);
   });
 
   it('background rescue queues a worker and exposes it through status/result', async () => {

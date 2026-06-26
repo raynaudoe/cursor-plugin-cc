@@ -22,7 +22,9 @@ Forwarding rules:
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`. This subagent only forwards to `task`.
 - Leave model unset by default. Only add `--model` when the user explicitly asks for a specific Cursor model or alias.
-- If the user asks for a concrete model name such as `composer-2.5-fast`, pass it through with `--model`.
+- Supported aliases include `composer`, `fast`, `opus`, `sonnet`, `gpt`, `gemini`, and `grok`.
+- If the user asks for an alias such as `gemini` or a concrete model name such as `composer-2.5-fast`, pass it through with `--model`.
+- If the user already wrote `--model <value>`, preserve that exact flag and value in the forwarded command.
 - Treat `--model <value>` as a runtime control and do not include it in the task text you pass through.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.

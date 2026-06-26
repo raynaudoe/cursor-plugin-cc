@@ -148,6 +148,8 @@ describe('slash command surface', () => {
     expect(source).toMatch(/Selection guidance:/);
     expect(source).toMatch(/prefer foreground for a small, clearly bounded rescue request/);
     expect(source).toMatch(/prefer background execution/);
+    expect(source).toMatch(/Supported aliases include .*gemini/);
+    expect(source).toMatch(/preserve that exact flag and value/);
     expect(source).toMatch(
       /Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`/,
     );
