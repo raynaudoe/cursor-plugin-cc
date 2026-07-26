@@ -27,10 +27,12 @@
     "node": ">=18.18"
   },
   "files": [
-    "plugin.json",
+    ".claude-plugin",
     "scripts",
     "commands",
-    "agents"
+    "agents",
+    "skills",
+    "hooks"
   ],
   "scripts": {
     "test": "vitest run",

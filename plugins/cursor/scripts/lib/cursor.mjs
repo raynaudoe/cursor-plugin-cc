@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { parseLine } from './parse.mjs';
-import { run } from './run.mjs';
+import { killTree, run } from './run.mjs';
 
 // Convenience aliases that map shortcuts to real Cursor model ids. Cursor
 // rotates these over time — `/cursor:setup --print-models` shows the live
@@ -37,14 +37,18 @@ export const MODEL_ALIASES = {
   'gpt-5.3-codex': 'gpt-5.3-codex',
   'gpt-5.3-codex-fast': 'gpt-5.3-codex-fast',
   'gpt-5.3-codex-high': 'gpt-5.3-codex-high',
-  'gpt-5.2-codex': 'gpt-5.2-codex',
   'gpt-5.2': 'gpt-5.2',
-  grok: 'grok-4.3',
-  'grok-4.3': 'grok-4.3',
-  'grok-build': 'grok-build-0.1',
+  // Grok ids are namespaced `cursor-` upstream. Without that prefix cursor-agent
+  // rejects the run, so the bare `grok-*` spellings must never be emitted.
+  grok: 'cursor-grok-4.5-high',
+  'grok-4.5': 'cursor-grok-4.5-high',
+  'grok-4.5-high': 'cursor-grok-4.5-high',
+  'grok-4.5-fast': 'cursor-grok-4.5-high-fast',
+  'grok-4.5-medium': 'cursor-grok-4.5-medium',
+  'grok-4.5-low': 'cursor-grok-4.5-low',
   gemini: 'gemini-3.1-pro',
   'gemini-pro': 'gemini-3.1-pro',
-  'gemini-flash': 'gemini-3-flash',
+  'gemini-flash': 'gemini-3.6-flash-high',
 };
 
 // `auto` lets Cursor pick whatever model the account is entitled to —
@@ -82,12 +86,11 @@ let cachedBin = null;
  * @returns {Promise<string>}
  */
 export async function resolveBin() {
-  if (cachedBin) return cachedBin;
+  // The override costs nothing to read, so never cache it: caching would make
+  // the env var read-once-per-process and the result depend on call order.
   const override = process.env.CURSOR_AGENT_BIN?.trim();
-  if (override && override.length > 0) {
-    cachedBin = override;
-    return cachedBin;
-  }
+  if (override) return override;
+  if (cachedBin) return cachedBin;
   for (const candidate of ['cursor-agent', 'agent']) {
     const res = await run('which', [candidate]);
     if (res.exitCode === 0 && res.stdout.trim()) {
@@ -106,8 +109,8 @@ export async function resolveBin() {
  * @property {string} model
  * @property {string=} resumeChatId
  * @property {boolean=} resumeLatest
- * @property {boolean=} cloud
- * @property {boolean=} force              Default: true.
+ * @property {boolean=} readOnly          Blocks edits. Wins over `force`.
+ * @property {boolean=} force             Default: true.
  */
 
 /**
@@ -115,11 +118,34 @@ export async function resolveBin() {
  * @returns {string[]}
  */
 export function buildArgs(opts) {
-  const args = ['-p', '--output-format', 'stream-json', '--trust', '--model', opts.model];
-  if (opts.force !== false) args.push('--force');
-  if (opts.cloud) args.push('--cloud');
+  const args = [
+    '-p',
+    '--output-format',
+    'stream-json',
+    // Finer-grained events so phase reporting can move while the agent works.
+    '--stream-partial-output',
+    '--trust',
+    '--model',
+    opts.model,
+  ];
+  if (opts.readOnly) {
+    // Verified against cursor-agent 2026.07.23:
+    //   --mode ask      writes blocked, final answer in the `result` event.
+    //   --mode plan     writes blocked, but the answer is delivered as a
+    //                   `createPlanToolCall` payload and `result` carries only
+    //                   narration — the run looks empty to every consumer.
+    //   --sandbox enabled  writes ALLOWED. Governs command execution, not edits.
+    // So `ask` is the only mode that is both safe and readable. `--force` would
+    // override it, which is why a read-only run must never pass it.
+    args.push('--mode', 'ask');
+  } else if (opts.force !== false) {
+    args.push('--force');
+  }
   if (opts.resumeChatId) args.push(`--resume=${opts.resumeChatId}`);
-  else if (opts.resumeLatest) args.push('--resume');
+  // `--resume` takes an OPTIONAL chat id, so a bare `--resume` immediately
+  // followed by the positional prompt swallows the prompt. `--continue` is the
+  // boolean form and cannot.
+  else if (opts.resumeLatest) args.push('--continue');
   args.push(opts.prompt);
   return args;
 }
@@ -130,20 +156,23 @@ export function buildArgs(opts) {
  * @property {string} model
  * @property {string=} resumeChatId
  * @property {boolean=} resumeLatest
- * @property {boolean=} cloud
+ * @property {boolean=} readOnly
  * @property {boolean=} force
  * @property {string=} cwd
  * @property {number=} timeoutSec
  * @property {string} logPath
  * @property {(ev: Record<string, unknown>) => void=} onEvent
  * @property {(line: string) => void=} onRaw
+ * @property {(pid: number) => void=} onSpawn
  */
 
 /**
  * @typedef {Object} DelegateResult
  * @property {number} exitCode
  * @property {Record<string, unknown>[]} events
- * @property {boolean} killed
+ * @property {boolean} killed             Killed by the timeout watchdog (abnormal).
+ * @property {boolean} reaped             Reaped after emitting its result (normal).
+ * @property {number=} pid
  */
 
 /**
@@ -157,7 +186,13 @@ export async function runHeadless(opts) {
     cwd: opts.cwd ?? process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
     env: process.env,
+    // Lead its own process group so cancellation can signal the whole tree —
+    // cursor-agent shells out to run tests and builds, and those grandchildren
+    // survive a bare pid kill.
+    detached: process.platform !== 'win32',
+    windowsHide: true,
   });
+  if (typeof child.pid === 'number' && opts.onSpawn) opts.onSpawn(child.pid);
   if (!child.stdout || !child.stderr) {
     throw new Error('cursor-agent spawn failed: stdout/stderr not attached');
   }
@@ -182,6 +217,15 @@ export async function runHeadless(opts) {
   const events = [];
   let sawResult = false;
   let killed = false;
+  let reaped = false;
+  const signalTree = (signal) => {
+    if (child.killed || child.exitCode !== null) return;
+    try {
+      killTree(child.pid, signal);
+    } catch {
+      // noop — the process may have exited between the check and the signal.
+    }
+  };
 
   const stdoutLines = createInterface({ input: childStdout, crlfDelay: Infinity });
   stdoutLines.on('line', (line) => {
@@ -197,21 +241,12 @@ export async function runHeadless(opts) {
       sawResult = true;
       setTimeout(() => {
         if (!child.killed && child.exitCode === null) {
-          killed = true;
-          try {
-            child.kill('SIGTERM');
-          } catch {
-            // noop
-          }
-          setTimeout(() => {
-            if (!child.killed && child.exitCode === null) {
-              try {
-                child.kill('SIGKILL');
-              } catch {
-                // noop
-              }
-            }
-          }, 5_000);
+          // The run already delivered its result; this is a normal reap of a
+          // lingering process, NOT a failure. Tracked separately from `killed`
+          // so it cannot flip a successful job to `failed`.
+          reaped = true;
+          signalTree('SIGTERM');
+          setTimeout(() => signalTree('SIGKILL'), 5_000);
         }
       }, 5_000);
     }
@@ -226,20 +261,8 @@ export async function runHeadless(opts) {
   if (typeof opts.timeoutSec === 'number' && opts.timeoutSec > 0) {
     timeoutHandle = setTimeout(() => {
       killed = true;
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        // noop
-      }
-      setTimeout(() => {
-        if (!child.killed && child.exitCode === null) {
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            // noop
-          }
-        }
-      }, 5_000);
+      signalTree('SIGTERM');
+      setTimeout(() => signalTree('SIGKILL'), 5_000);
     }, opts.timeoutSec * 1_000);
   }
 
@@ -268,7 +291,7 @@ export async function runHeadless(opts) {
       resolve();
     }
   });
-  return { exitCode, events, killed };
+  return { exitCode, events, killed, reaped, pid: child.pid };
 }
 
 /**
@@ -300,6 +323,8 @@ export async function listModels() {
     const res = await run(bin, ['--list-models'], { timeoutMs: 10_000 });
     if (res.exitCode !== 0) {
       const fallback = await run(bin, ['models'], { timeoutMs: 10_000 });
+      // An unknown-subcommand usage banner on stdout is not a model list.
+      if (fallback.exitCode !== 0) return [];
       return fallback.stdout
         .split('\n')
         .map((l) => l.trim())
@@ -349,78 +374,4 @@ export async function listConfiguredMcps() {
   } catch {
     return [];
   }
-}
-
-/**
- * @typedef {Object} SessionSummary
- * @property {string} id
- * @property {string=} summary
- * @property {string=} updatedAt
- */
-
-/**
- * @param {string} [cwd]
- * @returns {Promise<SessionSummary[]>}
- */
-export async function listSessions(cwd = process.cwd()) {
-  try {
-    const bin = await resolveBin();
-    const res = await run(bin, ['ls', '--output-format', 'json'], {
-      cwd,
-      timeoutMs: 5_000,
-    });
-    if (res.exitCode !== 0 || !res.stdout) return [];
-    let parsed;
-    try {
-      parsed = JSON.parse(res.stdout);
-    } catch {
-      return [];
-    }
-    if (!Array.isArray(parsed)) return [];
-    /** @type {SessionSummary[]} */
-    const out = [];
-    for (const row of parsed) {
-      if (!row || typeof row !== 'object') continue;
-      const id =
-        (typeof row.id === 'string' && row.id) ||
-        (typeof row.chat_id === 'string' && row.chat_id) ||
-        (typeof row.chatId === 'string' && row.chatId);
-      if (!id) continue;
-      const summary =
-        typeof row.summary === 'string'
-          ? row.summary
-          : typeof row.title === 'string'
-            ? row.title
-            : undefined;
-      const updatedAt =
-        typeof row.updated_at === 'string'
-          ? row.updated_at
-          : typeof row.updatedAt === 'string'
-            ? row.updatedAt
-            : undefined;
-      /** @type {SessionSummary} */
-      const entry = { id };
-      if (summary !== undefined) entry.summary = summary;
-      if (updatedAt !== undefined) entry.updatedAt = updatedAt;
-      out.push(entry);
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-/**
- * @param {string} input
- * @returns {string}
- */
-export function maskSecrets(input) {
-  let out = input;
-  for (const [name, value] of Object.entries(process.env)) {
-    if (!value || value.length < 4) continue;
-    if (/KEY|TOKEN|SECRET|PASSWORD/.test(name)) {
-      out = out.split(value).join('***');
-    }
-  }
-  return out;
 }

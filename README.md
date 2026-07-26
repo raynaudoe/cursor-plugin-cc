@@ -91,10 +91,20 @@ Background jobs are stored under:
 Cursor runs through:
 
 ```text
-cursor-agent -p --output-format stream-json --trust --model <id>
+# rescue (write-capable)
+cursor-agent -p --output-format stream-json --stream-partial-output --trust --model <id> --force
+
+# review, adversarial review, debate (read-only)
+cursor-agent -p --output-format stream-json --stream-partial-output --trust --model <id> --mode ask
 ```
 
-Reviews and debates are read-only by prompt contract and post-flight checks. If Cursor writes files during those runs, the job is marked failed and the result lists the touched files.
+Reviews and debates are read-only at the CLI, not just by prompt contract: `--mode ask` blocks edits and `--force` is never passed, because it would override the mode. A post-flight check still runs on top, and if Cursor reports touching files during a read-only run the result says so explicitly.
+
+`--mode ask` rather than `--mode plan` is deliberate, and verified against cursor-agent 2026.07.23. Both block writes, but plan mode delivers its answer as a `createPlanToolCall` payload and leaves the `result` event carrying only progress narration, so a review run that way comes back empty. `--sandbox enabled` is not an alternative: it governs command execution and still permits file writes. Note that no write-blocking mode allows shell, so read-only runs inspect changed files directly rather than running git.
+
+Foreground runs stream progress to stderr as `[cursor] …` lines while Cursor works, so a long run stays visible instead of blocking silently. Those lines are progress, never results.
+
+Jobs are stamped with the Claude Code session id, so `/cursor:status` shows this session's work rather than every job ever recorded for the repository. When the session ends, any still-running Cursor job is reaped rather than left orphaned.
 
 ## Development
 

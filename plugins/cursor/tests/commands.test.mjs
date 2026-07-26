@@ -6,7 +6,9 @@ const COMMANDS_DIR = new URL('../commands', import.meta.url).pathname;
 const AGENTS_DIR = new URL('../agents', import.meta.url).pathname;
 const MARKETPLACE_PATH = new URL('../../../.claude-plugin/marketplace.json', import.meta.url)
   .pathname;
-const PLUGIN_JSON_PATH = new URL('../plugin.json', import.meta.url).pathname;
+const PLUGIN_JSON_PATH = new URL('../.claude-plugin/plugin.json', import.meta.url).pathname;
+const SKILLS_DIR = new URL('../skills', import.meta.url).pathname;
+const HOOKS_PATH = new URL('../hooks/hooks.json', import.meta.url).pathname;
 
 function readCommand(file) {
   return readFileSync(join(COMMANDS_DIR, file), 'utf8');
@@ -146,13 +148,76 @@ describe('slash command surface', () => {
     const source = readAgent('cursor-rescue.md');
     expect(source).toMatch(/model: sonnet/);
     expect(source).toMatch(/Selection guidance:/);
-    expect(source).toMatch(/prefer foreground for a small, clearly bounded rescue request/);
-    expect(source).toMatch(/prefer background execution/);
+    expect(source).toMatch(/Default to foreground/);
     expect(source).toMatch(/Supported aliases include .*gemini/);
     expect(source).toMatch(/preserve that exact flag and value/);
-    expect(source).toMatch(
-      /Do not call `review`, `adversarial-review`, `status`, `result`, or `cancel`/,
-    );
+    expect(source).toMatch(/Do not call `review`, `adversarial-review`, `result`, or `cancel`/);
     expect(source).toMatch(/Return the stdout of the `cursor-companion` command exactly as-is/);
+  });
+
+  it('pins an explicit Bash timeout that outlives the runtime watchdog', () => {
+    // Without this the 120 s default budget backgrounds the shell and the user
+    // is handed a shell id instead of Cursor's answer.
+    for (const source of [readAgent('cursor-rescue.md'), readCommand('rescue.md')]) {
+      expect(source).toMatch(/660000/);
+    }
+  });
+
+  it('lets a backgrounded rescue resolve its own job instead of returning a bare id', () => {
+    const agent = readAgent('cursor-rescue.md');
+    expect(agent).toMatch(/status <job-id> --wait/);
+    expect(readCommand('rescue.md')).toMatch(/status <job-id> --wait/);
+  });
+
+  it('binds the prompting skill to the rescue subagent', () => {
+    const source = readAgent('cursor-rescue.md');
+    expect(source).toMatch(/^skills:\n {2}- cursor-prompting$/m);
+  });
+});
+
+describe('shipped skills', () => {
+  const SKILLS = ['cursor-result-handling', 'cursor-prompting'];
+  // AGENTS.md rule 8: Cursor prompts must never advertise Codex-only controls.
+  const CODEX_ONLY = [
+    /--effort/,
+    /\bspark\b/i,
+    /gpt-5/i,
+    /--write\b/,
+    /review gate/i,
+    /\bcodex\b/i,
+  ];
+
+  it.each(SKILLS)('%s ships a parseable skill with frontmatter', (name) => {
+    const source = readFileSync(join(SKILLS_DIR, name, 'SKILL.md'), 'utf8');
+    expect(source.startsWith('---\n')).toBe(true);
+    expect(source).toMatch(new RegExp(`^name: ${name}$`, 'm'));
+    expect(source).toMatch(/^description: .+$/m);
+    expect(source).toMatch(/^user-invocable: false$/m);
+  });
+
+  it.each(SKILLS)('%s advertises no Codex-only controls', (name) => {
+    const source = readFileSync(join(SKILLS_DIR, name, 'SKILL.md'), 'utf8');
+    for (const pattern of CODEX_ONLY) {
+      expect(source).not.toMatch(pattern);
+    }
+  });
+
+  it('forbids auto-applying review fixes', () => {
+    const source = readFileSync(join(SKILLS_DIR, 'cursor-result-handling', 'SKILL.md'), 'utf8');
+    expect(source).toMatch(/strictly forbidden/);
+  });
+});
+
+describe('session lifecycle hooks', () => {
+  it('registers SessionStart and SessionEnd only', () => {
+    const hooks = JSON.parse(readFileSync(HOOKS_PATH, 'utf8'));
+    expect(Object.keys(hooks.hooks).sort()).toEqual(['SessionEnd', 'SessionStart']);
+    // AGENTS.md rule 8: no stop-time review gate until Cursor actually has one.
+    expect(hooks.hooks.Stop).toBeUndefined();
+  });
+
+  it('invokes the lifecycle script through CLAUDE_PLUGIN_ROOT', () => {
+    const raw = readFileSync(HOOKS_PATH, 'utf8');
+    expect(raw).toMatch(/\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/session-lifecycle-hook\.mjs/);
   });
 });

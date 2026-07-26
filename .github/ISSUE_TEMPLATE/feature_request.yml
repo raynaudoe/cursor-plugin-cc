@@ -14,7 +14,7 @@ body:
       description: Describe the friction, not a solution yet. What did you try to do, what got in the way?
       placeholder: |
         "I want to re-run a failed delegate with the same prompt but a different model.
-         Right now I copy the prompt from /cursor:result and re-type /cursor:delegate --model opus."
+         Right now I copy the prompt from /cursor:result and re-type /cursor:rescue --model opus."
     validations:
       required: true
 

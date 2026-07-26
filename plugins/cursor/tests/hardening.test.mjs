@@ -2,6 +2,7 @@ import { writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   collapseCommandArgv,
+  DEFAULT_TIMEOUT_SEC,
   parseArgv,
   parseTimeout,
   splitArgString,
@@ -48,12 +49,27 @@ describe('args hardening', () => {
   });
 
   it('parseTimeout falls back for junk and zero, keeps valid values', () => {
-    expect(parseTimeout('abc')).toBe(1800);
-    expect(parseTimeout('0')).toBe(1800);
-    expect(parseTimeout(undefined)).toBe(1800);
+    expect(parseTimeout('abc')).toBe(DEFAULT_TIMEOUT_SEC);
+    expect(parseTimeout('0')).toBe(DEFAULT_TIMEOUT_SEC);
+    expect(parseTimeout(undefined)).toBe(DEFAULT_TIMEOUT_SEC);
     expect(parseTimeout('60')).toBe(60);
     expect(parseTimeout(45)).toBe(45);
     expect(parseTimeout('x', 5)).toBe(5);
+  });
+
+  it('parseTimeout ignores a bare --timeout instead of arming a 1-second watchdog', () => {
+    // parseArgv yields boolean `true` for a valueless flag; `Number(true)` is 1,
+    // which used to SIGTERM cursor-agent one second into the run.
+    const { flags } = parseArgv(['--timeout']);
+    expect(flags.timeout).toBe(true);
+    expect(parseTimeout(flags.timeout)).toBe(DEFAULT_TIMEOUT_SEC);
+    expect(parseTimeout(false)).toBe(DEFAULT_TIMEOUT_SEC);
+  });
+
+  it('the default timeout stays under the Bash tool budget the rescue agent sets', () => {
+    // agents/cursor-rescue.md pins a 660000 ms Bash timeout; the runtime watchdog
+    // must fire first so the tool call returns a result rather than being killed.
+    expect(DEFAULT_TIMEOUT_SEC * 1000).toBeLessThan(660_000);
   });
 
   it('collapseCommandArgv splits the post -- string with quote handling', () => {

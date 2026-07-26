@@ -33,7 +33,7 @@ Keep branches focused. One feature or fix per PR.
 Conventional-commits style:
 
 ```
-feat(browser): auto-discover localhost port from vite.config
+feat(review): add --scope branch for base-ref reviews
 fix(rescue): quote $ARGUMENTS so zsh doesn't glob ?
 refactor: drop esbuild, ship .mjs directly
 docs(readme): add troubleshooting section
@@ -90,7 +90,7 @@ The plugin has a consistent recipe. Follow it exactly for any new command — re
 Tests use a stub binary that replays NDJSON fixtures. To smoke-test against the real CLI:
 
 ```bash
-CURSOR_AGENT_BIN=/path/to/cursor-agent node plugins/cursor/scripts/setup.mjs --doctor
+CURSOR_AGENT_BIN=/path/to/cursor-agent node plugins/cursor/scripts/setup.mjs
 node plugins/cursor/scripts/rescue.mjs -- "write a short haiku about git"
 ```
 
@@ -101,7 +101,7 @@ This spends real Cursor tokens, so keep it to trivial tasks during development.
 Use the GitHub issue template. Include:
 
 - `node --version`, `cursor-agent --version`
-- Output of `/cursor:setup --doctor`
+- Output of `/cursor:setup`
 - For `/cursor:review`, `/cursor:adversarial-review`, or `/cursor:rescue` failures: the job id from `/cursor:status` and the path of the raw log under `~/.cursor-plugin-cc/jobs/<hash>/logs/<id>.ndjson`.
 
 ## Release flow
@@ -109,7 +109,7 @@ Use the GitHub issue template. Include:
 Maintainer-only, reference:
 
 1. Ensure `CHANGELOG.md` has a `## x.y.z — …` section with Added/Changed/Fixed bullets moved out of `## Unreleased`.
-2. Bump `version` in `plugins/cursor/package.json` and `plugins/cursor/plugin.json` to match.
+2. Bump `version` in `plugins/cursor/package.json`, `plugins/cursor/.claude-plugin/plugin.json`, and the `cursor` entry in `.claude-plugin/marketplace.json` to match.
 3. Merge a `release/x.y.z` branch to `main` via PR.
 4. `git tag -a vX.Y.Z -m "vX.Y.Z — headline"` + `git push origin vX.Y.Z`.
 5. `gh release create vX.Y.Z --title "vX.Y.Z — headline" --notes-file <release-notes.md>`.

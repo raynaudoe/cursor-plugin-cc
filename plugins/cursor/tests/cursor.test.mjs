@@ -21,15 +21,93 @@ describe('buildArgs', () => {
     expect(args).not.toContain('--force');
   });
 
-  it('adds --cloud and --resume when requested', () => {
-    const args = buildArgs({
-      prompt: 'hi',
-      model: 'auto',
-      cloud: true,
-      resumeChatId: 'chat_xyz',
-    });
-    expect(args).toContain('--cloud');
+  it('adds --resume=<id> when resuming a specific chat', () => {
+    const args = buildArgs({ prompt: 'hi', model: 'auto', resumeChatId: 'chat_xyz' });
     expect(args).toContain('--resume=chat_xyz');
+  });
+
+  it('uses --continue rather than a bare --resume so the prompt is not swallowed', () => {
+    // `--resume` takes an OPTIONAL chat id, so `--resume <prompt>` consumes the
+    // prompt and cursor-agent fails with "No prompt provided".
+    const args = buildArgs({ prompt: 'keep going', model: 'auto', resumeLatest: true });
+    expect(args).toContain('--continue');
+    expect(args).not.toContain('--resume');
+    expect(args[args.length - 1]).toBe('keep going');
+  });
+
+  it('read-only runs pass --mode ask and never --force', () => {
+    const args = buildArgs({ prompt: 'review this', model: 'auto', readOnly: true });
+    expect(args).toContain('--mode');
+    expect(args[args.indexOf('--mode') + 1]).toBe('ask');
+    // --force overrides the mode, so its absence is what makes the run safe.
+    expect(args).not.toContain('--force');
+    expect(args).not.toContain('--yolo');
+  });
+
+  it('never uses --mode plan for read-only runs', () => {
+    // Verified live: plan mode blocks writes but delivers its answer as a
+    // createPlanToolCall payload, leaving the `result` event with narration only.
+    // A review run that way returns no findings at all.
+    const args = buildArgs({ prompt: 'review this', model: 'auto', readOnly: true });
+    expect(args).not.toContain('plan');
+  });
+
+  it('never uses --sandbox as the read-only mechanism', () => {
+    // Verified live: `--sandbox enabled` still permits file writes.
+    const args = buildArgs({ prompt: 'review this', model: 'auto', readOnly: true });
+    expect(args).not.toContain('--sandbox');
+  });
+
+  it('read-only wins over an explicit force', () => {
+    const args = buildArgs({ prompt: 'review this', model: 'auto', readOnly: true, force: true });
+    expect(args).not.toContain('--force');
+  });
+
+  it('streams partial output so phase reporting can move', () => {
+    const args = buildArgs({ prompt: 'hi', model: 'auto' });
+    expect(args).toContain('--stream-partial-output');
+  });
+});
+
+describe('model alias targets', () => {
+  // Verified against `cursor-agent --list-models` (2026.07.23): every alias below
+  // resolved to a live id. These assertions pin the shapes that have silently
+  // drifted before — a bad target is only discovered when a real run is rejected.
+  it('namespaces every Grok target with the cursor- prefix', () => {
+    const grok = Object.entries(MODEL_ALIASES).filter(([alias]) => alias.startsWith('grok'));
+    expect(grok.length).toBeGreaterThan(0);
+    for (const [alias, target] of grok) {
+      expect(target, alias).toMatch(/^cursor-grok-/);
+    }
+  });
+
+  it('resolves in a single hop', () => {
+    // Callers look up exactly once. A target that is itself a key is fine only if
+    // it maps to itself; anything else would need a second hop and would silently
+    // forward the wrong id.
+    for (const [alias, target] of Object.entries(MODEL_ALIASES)) {
+      if (!(target in MODEL_ALIASES)) continue;
+      expect(MODEL_ALIASES[target], `${alias} -> ${target} is not a fixed point`).toBe(target);
+    }
+  });
+
+  it('keeps retired Composer ids as the only self-referential passthroughs', () => {
+    const identity = Object.entries(MODEL_ALIASES)
+      .filter(([alias, target]) => alias === target)
+      .map(([alias]) => alias)
+      .sort();
+    expect(identity).toEqual([
+      'auto',
+      'composer-1.5',
+      'composer-2',
+      'composer-2-fast',
+      'composer-2.5',
+      'composer-2.5-fast',
+      'gpt-5.2',
+      'gpt-5.3-codex',
+      'gpt-5.3-codex-fast',
+      'gpt-5.3-codex-high',
+    ]);
   });
 });
 

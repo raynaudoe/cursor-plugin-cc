@@ -125,6 +125,102 @@ describe('cursor companion runtime', () => {
     expect(job.resultText).toMatch(/APPROVE WITH NITS/);
   });
 
+  it('review invokes cursor-agent read-only and never write-capable', async () => {
+    // /cursor:review promises the user it will not change anything. `--mode ask`
+    // is what enforces that, and `--force` would override it.
+    process.env.CURSOR_AGENT_STUB_FIXTURE = REVIEW_HAPPY_FIXTURE;
+    const argvLog = join(tmp.dir, 'review-argv.json');
+    process.env.CURSOR_AGENT_STUB_ARGV_LOG = argvLog;
+    initRepo(tmp.dir);
+    writeFileSync(join(tmp.dir, 'README.md'), 'hello again\n');
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await reviewMain(['--wait']);
+    } finally {
+      outSpy.mockRestore();
+    }
+    const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
+    expect(argv).toContain('--mode');
+    expect(argv[argv.indexOf('--mode') + 1]).toBe('ask');
+    expect(argv).not.toContain('--force');
+    expect(argv).not.toContain('--yolo');
+  });
+
+  it('streams [cursor] progress to stderr during a foreground run', async () => {
+    // A silent foreground run is the difference between a subagent and a frozen
+    // shell command. Progress must go to stderr so stdout stays the clean payload.
+    process.env.CURSOR_AGENT_STUB_FIXTURE = HAPPY_FIXTURE;
+    initRepo(tmp.dir);
+    const stderrLines = [];
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      stderrLines.push(String(chunk));
+      return true;
+    });
+    const stdoutChunks = [];
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    });
+    try {
+      await rescueMain(['--', 'do a thing']);
+    } finally {
+      outSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+    const progress = stderrLines.filter((line) => line.startsWith('[cursor] '));
+    expect(progress.length).toBeGreaterThanOrEqual(2);
+    expect(progress.join('')).toMatch(/starting \(model /);
+    expect(stdoutChunks.join('')).not.toMatch(/\[cursor\] /);
+  });
+
+  it('suppresses the progress feed under --json', async () => {
+    process.env.CURSOR_AGENT_STUB_FIXTURE = HAPPY_FIXTURE;
+    initRepo(tmp.dir);
+    const stderrLines = [];
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      stderrLines.push(String(chunk));
+      return true;
+    });
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await rescueMain(['--json', '--', 'do a thing']);
+    } finally {
+      outSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+    expect(stderrLines.filter((line) => line.startsWith('[cursor] '))).toHaveLength(0);
+  });
+
+  it('records the cursor-agent pid so cancel can reach its process group', async () => {
+    process.env.CURSOR_AGENT_STUB_FIXTURE = HAPPY_FIXTURE;
+    initRepo(tmp.dir);
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await rescueMain(['--', 'do a thing']);
+    } finally {
+      outSpy.mockRestore();
+    }
+    expect(typeof listJobs(tmp.dir)[0].agentPid).toBe('number');
+  });
+
+  it('keeps a job completed when the runtime reaps a lingering cursor-agent', async () => {
+    // The post-result watchdog fires on healthy runs where cursor-agent does not
+    // self-exit. That reap is normal and must not report the job as failed.
+    process.env.CURSOR_AGENT_STUB_FIXTURE = HAPPY_FIXTURE;
+    process.env.CURSOR_AGENT_STUB_HANG = '1';
+    initRepo(tmp.dir);
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await rescueMain(['--', 'do a thing']);
+    } finally {
+      outSpy.mockRestore();
+      delete process.env.CURSOR_AGENT_STUB_HANG;
+    }
+    const job = listJobs(tmp.dir)[0];
+    expect(job.status).toBe('completed');
+    expect(job.exitCode).toBe(0);
+  }, 20_000);
+
   it('normal review supports branch diffs with --base', async () => {
     process.env.CURSOR_AGENT_STUB_FIXTURE = REVIEW_HAPPY_FIXTURE;
     initRepo(tmp.dir);

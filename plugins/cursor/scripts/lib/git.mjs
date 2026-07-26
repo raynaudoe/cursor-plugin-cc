@@ -181,7 +181,7 @@ function untrackedSection(cwd, files) {
  * Resolve and collect the git context for a review.
  *
  * @param {string} cwd
- * @param {{scope?: 'auto'|'working-tree'|'branch', base?: string|null, maxDiffBytes?: number}} [opts]
+ * @param {{scope?: 'auto'|'working-tree'|'branch', base?: string|null, maxDiffBytes?: number, maxInlineFiles?: number}} [opts]
  * @returns {Promise<ReviewContext>}
  */
 export async function collectReviewContext(cwd, opts = {}) {
@@ -253,7 +253,7 @@ export async function collectReviewContext(cwd, opts = {}) {
       inputMode: includeDiff ? 'inline-diff' : 'self-collect',
       collectionGuidance: includeDiff
         ? 'Use the inline diff below as primary evidence.'
-        : 'The context below is a lightweight summary. Inspect the target diff yourself with read-only git commands before finalizing.',
+        : 'The context below is a lightweight summary. Read the changed files directly before finalizing. Read-only runs cannot execute shell commands, so use file reads rather than git.',
       isEmpty: false,
     };
   }
@@ -294,7 +294,7 @@ export async function collectReviewContext(cwd, opts = {}) {
     inputMode: includeDiff ? 'inline-diff' : 'self-collect',
     collectionGuidance: includeDiff
       ? 'Use the inline diff below as primary evidence.'
-      : 'The context below is a lightweight summary. Inspect the target diff yourself with read-only git commands before finalizing.',
+      : 'The context below is a lightweight summary. Read the changed files directly before finalizing. Read-only runs cannot execute shell commands, so use file reads rather than git.',
     isEmpty: false,
   };
 }

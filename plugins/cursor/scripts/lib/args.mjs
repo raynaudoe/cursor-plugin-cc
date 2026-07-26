@@ -4,7 +4,7 @@
 //   - `--foo`                  → flags.foo = true      (if declared boolean)
 //   - `--foo value`            → flags.foo = 'value'   (unless declared boolean)
 //   - `--foo=value`            → flags.foo = 'value'
-//   - `--no-foo`               → flags.foo = false AND flags['foo-kebab'] = false
+//   - `--no-foo`               → flags.foo = false (plus its camelCase twin)
 //   - numeric auto-cast        → `--timeout 60` → flags.timeout === 60
 //   - both kebab + camelCase   → flags['git-check'] AND flags.gitCheck populated
 //   - positionals              → everything else, in order
@@ -211,17 +211,27 @@ export function parseCommandArgv(rawArgv, booleans = []) {
   return parseArgv(collapseCommandArgv(rawArgv), booleans);
 }
 
+// Default watchdog for a single cursor-agent run, in seconds. Deliberately kept
+// under the Claude Code Bash tool's own budget: a runtime cap that outlives the
+// tool call waiting on it turns a foreground delegation into a backgrounded
+// shell, which is exactly what makes the plugin feel like an external console
+// process rather than a subagent.
+export const DEFAULT_TIMEOUT_SEC = 600;
+
 /**
  * Normalise a `--timeout` flag value (which may be a number, a numeric string,
  * or junk) into a positive integer number of seconds, falling back to
  * `fallback` for anything non-finite or ≤ 0. Prevents `--timeout abc` → `NaN`
- * silently disabling the watchdog (`NaN > 0` is false, so no timer arms).
+ * silently disabling the watchdog (`NaN > 0` is false, so no timer arms), and
+ * a bare `--timeout` (parsed as boolean `true`) from arming a 1-second one via
+ * `Number(true)`.
  *
  * @param {unknown} raw
  * @param {number} [fallback]
  * @returns {number}
  */
-export function parseTimeout(raw, fallback = 1800) {
+export function parseTimeout(raw, fallback = DEFAULT_TIMEOUT_SEC) {
+  if (typeof raw === 'boolean') return fallback;
   const n = typeof raw === 'number' ? raw : raw == null || raw === '' ? NaN : Number(raw);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
