@@ -5,7 +5,42 @@
 //
 // Replaces the subset of `execa` that this plugin actually uses.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+
+/**
+ * Signal a process AND everything it spawned.
+ *
+ * `cursor-agent` shells out to run tests and build commands, so signalling only
+ * the direct child leaves those grandchildren running. On POSIX we signal the
+ * negative pid (the process group), which requires the child to have been
+ * spawned with `detached: true` so that it leads its own group. Windows has no
+ * process groups, so `taskkill /T` is the only reliable tree kill there.
+ *
+ * @param {number|undefined} pid
+ * @param {NodeJS.Signals} [signal]
+ * @returns {boolean}   True when a signal was actually delivered.
+ */
+export function killTree(pid, signal = 'SIGTERM') {
+  if (typeof pid !== 'number' || !Number.isFinite(pid) || pid <= 0) return false;
+  if (process.platform === 'win32') {
+    const res = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+    return res.status === 0;
+  }
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch (err) {
+    // ESRCH on the group means it was never a group leader (or is already gone);
+    // fall back to the bare pid so a non-detached child is still signalled.
+    if (err?.code !== 'ESRCH') throw err;
+    try {
+      process.kill(pid, signal);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
 
 /**
  * @typedef {Object} RunOpts

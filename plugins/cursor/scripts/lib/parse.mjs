@@ -43,12 +43,24 @@ function dig(obj, keys) {
 }
 
 /**
+ * Chat id carried by a single streamed event, at any nesting depth.
+ *
+ * @param {CursorEvent} ev
+ * @returns {string|undefined}
+ */
+export function chatIdFromEvent(ev) {
+  return dig(ev, CHAT_ID_KEYS);
+}
+
+/**
+ * First chat id across a run's events.
+ *
  * @param {CursorEvent[]} events
  * @returns {string|undefined}
  */
 export function extractChatId(events) {
   for (const ev of events) {
-    const id = dig(ev, CHAT_ID_KEYS);
+    const id = chatIdFromEvent(ev);
     if (id) return id;
   }
   return undefined;

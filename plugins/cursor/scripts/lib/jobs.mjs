@@ -9,6 +9,39 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { ensureDir, jobsDir, logsDir } from './paths.mjs';
+import { killTree } from './run.mjs';
+
+// Set by the SessionStart hook via $CLAUDE_ENV_FILE. Jobs are stamped with it so
+// `/cursor:status` and friends show this Claude session's work rather than every
+// job ever recorded for the repository across every terminal.
+export const SESSION_ID_ENV = 'CURSOR_COMPANION_SESSION_ID';
+
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string|null}
+ */
+export function currentSessionId(env = process.env) {
+  const raw = env[SESSION_ID_ENV];
+  return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : null;
+}
+
+/**
+ * Narrow a job list to the current Claude session.
+ *
+ * Degrades to a no-op when the session id is unknown (hook not installed, or the
+ * companion invoked directly from a shell). Records written before the hook
+ * existed carry no `sessionId` and are always kept, so upgrading never hides a
+ * user's existing jobs.
+ *
+ * @param {JobRecord[]} jobs
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {JobRecord[]}
+ */
+export function filterForSession(jobs, env = process.env) {
+  const sessionId = currentSessionId(env);
+  if (!sessionId) return jobs;
+  return jobs.filter((job) => !job.sessionId || job.sessionId === sessionId);
+}
 
 /**
  * @typedef {'queued'|'running'|'completed'|'failed'|'cancelled'|'done'} JobStatus
@@ -22,10 +55,12 @@ import { ensureDir, jobsDir, logsDir } from './paths.mjs';
  * @property {string} model
  * @property {string=} cursorChatId
  * @property {number=} pid
+ * @property {number=} agentPid
+ * @property {string=} sessionId
  * @property {JobStatus} status
  * @property {string=} kind
  * @property {string=} kindLabel
- * @property {'review'|'task'|'setup'|string=} jobClass
+ * @property {'review'|'task'|'debate'|string=} jobClass
  * @property {string=} title
  * @property {string=} phase
  * @property {number=} exitCode
@@ -37,7 +72,7 @@ import { ensureDir, jobsDir, logsDir } from './paths.mjs';
  * @property {string=} resultText
  * @property {string[]=} filesTouched
  * @property {boolean=} background
- * @property {boolean=} cloud
+ * @property {boolean=} cancelSignalled
  * @property {Record<string, unknown>=} request
  */
 
@@ -48,14 +83,14 @@ import { ensureDir, jobsDir, logsDir } from './paths.mjs';
  * @property {string} prompt
  * @property {string} model
  * @property {boolean=} background
- * @property {boolean=} cloud
  * @property {JobStatus=} status
  * @property {string=} kind
  * @property {string=} kindLabel
- * @property {'review'|'task'|'setup'|string=} jobClass
+ * @property {'review'|'task'|'debate'|string=} jobClass
  * @property {string=} title
  * @property {string=} phase
  * @property {string=} summary
+ * @property {string=} sessionId
  * @property {Record<string, unknown>=} request
  */
 
@@ -109,6 +144,16 @@ export function normalizeStatus(status) {
 }
 
 /**
+ * Whether a status means a process is still expected to own this job.
+ *
+ * @param {unknown} status
+ * @returns {boolean}
+ */
+export function isActiveStatus(status) {
+  return status === 'queued' || status === 'running';
+}
+
+/**
  * @param {unknown} record
  * @returns {JobRecord|null}
  */
@@ -132,6 +177,7 @@ export function normalizeJobRecord(record) {
 export function createJob(init) {
   ensureDir(jobsDir(init.repoPath));
   ensureDir(logsDir(init.repoPath));
+  const sessionId = init.sessionId ?? currentSessionId();
   /** @type {JobRecord} */
   const record = {
     id: init.id,
@@ -141,8 +187,8 @@ export function createJob(init) {
     status: normalizeStatus(init.status ?? 'running'),
     startedAt: new Date().toISOString(),
     rawLogPath: rawLogPath(init.repoPath, init.id),
+    ...(sessionId ? { sessionId } : {}),
     ...(init.background ? { background: true } : {}),
-    ...(init.cloud ? { cloud: true } : {}),
     ...(init.kind ? { kind: init.kind } : {}),
     ...(init.kindLabel ? { kindLabel: init.kindLabel } : {}),
     ...(init.jobClass ? { jobClass: init.jobClass } : {}),
@@ -271,7 +317,16 @@ export function pruneOlderThanDays(repoPath, days = 30) {
   return removed;
 }
 
+// A signal target must be a real, positive pid. POSIX gives 0 and negative
+// values broadcast semantics: kill(0, sig) hits our own process group and
+// kill(-1, sig) hits every process this user can signal. A failed spawn can
+// persist a non-positive pid, so this must be enforced before any kill.
+function livePid(value) {
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
 function isProcessAlive(pid) {
+  if (livePid(pid) === null) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -289,32 +344,70 @@ function isProcessAlive(pid) {
 export async function cancelJob(repoPath, id, graceMs = 5_000) {
   const job = readJob(repoPath, id);
   if (!job) return null;
-  if (job.status !== 'running' && job.status !== 'queued') return job;
-  // NOTE: PIDs are recycled by the OS. If the original process already exited
+  if (!isActiveStatus(job.status)) return job;
+  // NOTE: PIDs are recycled by the OS. If the recorded process already exited
   // and its PID was reused, the signals below could hit an unrelated process.
-  // The job dir is short-lived and pruned after 30 days, so we accept this
-  // rather than track a process-group / start-time identity cross-platform.
-  if (typeof job.pid === 'number' && isProcessAlive(job.pid)) {
+  // Only a record still marked queued/running is ever signalled, which narrows
+  // the window but does not close it. We accept that rather than track a
+  // process-group / start-time identity cross-platform.
+  const agentPid = livePid(job.agentPid);
+  // Only ever group-signal `agentPid`. cursor-agent is spawned detached and so
+  // leads its own group, which is how the shell commands it runs get reaped.
+  // `job.pid` is the companion process: on a FOREGROUND run that is us, sharing
+  // the caller's process group, and group-signalling it would take down the
+  // Bash tool that invoked the cancel.
+  const workerPid = job.background === true ? livePid(job.pid) : null;
+  const alive = () =>
+    (agentPid !== null && isProcessAlive(agentPid)) ||
+    (workerPid !== null && isProcessAlive(workerPid));
+
+  let signalled = false;
+  if (agentPid !== null && isProcessAlive(agentPid)) {
     try {
-      process.kill(job.pid, 'SIGTERM');
+      signalled = killTree(agentPid, 'SIGTERM') || signalled;
     } catch {
       // ignore — may have exited
     }
-    const deadline = Date.now() + graceMs;
-    while (Date.now() < deadline && isProcessAlive(job.pid)) {
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    if (isProcessAlive(job.pid)) {
-      try {
-        process.kill(job.pid, 'SIGKILL');
-      } catch {
-        // ignore
-      }
+  }
+  if (workerPid !== null && workerPid !== process.pid && isProcessAlive(workerPid)) {
+    try {
+      process.kill(workerPid, 'SIGTERM');
+      signalled = true;
+    } catch {
+      // ignore — may have exited
     }
   }
+
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline && alive()) {
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  if (agentPid !== null && isProcessAlive(agentPid)) {
+    try {
+      killTree(agentPid, 'SIGKILL');
+    } catch {
+      // ignore
+    }
+  }
+  if (workerPid !== null && workerPid !== process.pid && isProcessAlive(workerPid)) {
+    try {
+      process.kill(workerPid, 'SIGKILL');
+    } catch {
+      // ignore
+    }
+  }
+
   return updateJob(repoPath, id, {
     status: 'cancelled',
+    // `phase` is a denormalisation of status; leaving it at 'editing' makes
+    // /cursor:status report a cancelled job as still editing. Matches what
+    // session-lifecycle-hook.mjs already writes when it reaps a job.
+    phase: 'cancelled',
     finishedAt: new Date().toISOString(),
+    // Records whether a live process was actually signalled. `false` means the
+    // job was already dead and we only tidied its record — worth telling the
+    // user rather than implying we stopped something.
+    cancelSignalled: signalled,
   });
 }
 
@@ -323,7 +416,7 @@ export async function cancelJob(repoPath, id, graceMs = 5_000) {
  * @returns {JobRecord[]}
  */
 export function findRunningJobs(repoPath) {
-  return listJobs(repoPath).filter((j) => j.status === 'queued' || j.status === 'running');
+  return listJobs(repoPath).filter((j) => isActiveStatus(j.status));
 }
 
 /**
@@ -331,6 +424,6 @@ export function findRunningJobs(repoPath) {
  * @returns {JobRecord|null}
  */
 export function mostRecentFinishedJob(repoPath) {
-  const jobs = listJobs(repoPath).filter((j) => j.status !== 'queued' && j.status !== 'running');
+  const jobs = listJobs(repoPath).filter((j) => !isActiveStatus(j.status));
   return jobs[0] ?? null;
 }

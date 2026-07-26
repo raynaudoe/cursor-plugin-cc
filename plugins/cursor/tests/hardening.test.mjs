@@ -1,9 +1,12 @@
 import { writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  BASH_TIMEOUT_CEILING_MS,
   collapseCommandArgv,
+  DEFAULT_TIMEOUT_SEC,
   parseArgv,
   parseTimeout,
+  RESCUE_BASH_TIMEOUT_MS,
   splitArgString,
 } from '../scripts/lib/args.mjs';
 import { id } from '../scripts/lib/id.mjs';
@@ -48,12 +51,31 @@ describe('args hardening', () => {
   });
 
   it('parseTimeout falls back for junk and zero, keeps valid values', () => {
-    expect(parseTimeout('abc')).toBe(1800);
-    expect(parseTimeout('0')).toBe(1800);
-    expect(parseTimeout(undefined)).toBe(1800);
+    expect(parseTimeout('abc')).toBe(DEFAULT_TIMEOUT_SEC);
+    expect(parseTimeout('0')).toBe(DEFAULT_TIMEOUT_SEC);
+    expect(parseTimeout(undefined)).toBe(DEFAULT_TIMEOUT_SEC);
     expect(parseTimeout('60')).toBe(60);
     expect(parseTimeout(45)).toBe(45);
     expect(parseTimeout('x', 5)).toBe(5);
+  });
+
+  it('parseTimeout ignores a bare --timeout instead of arming a 1-second watchdog', () => {
+    // parseArgv yields boolean `true` for a valueless flag; `Number(true)` is 1,
+    // which used to SIGTERM cursor-agent one second into the run.
+    const { flags } = parseArgv(['--timeout']);
+    expect(flags.timeout).toBe(true);
+    expect(parseTimeout(flags.timeout)).toBe(DEFAULT_TIMEOUT_SEC);
+    expect(parseTimeout(false)).toBe(DEFAULT_TIMEOUT_SEC);
+  });
+
+  it('keeps the whole timeout budget under the Bash tool ceiling', () => {
+    // The Bash tool rejects `timeout` above 600000 ms, so the chain has to be
+    // strictly ordered: the runtime watchdog fires first and still has time to
+    // render a result, and the Bash timeout stays legal.
+    expect(RESCUE_BASH_TIMEOUT_MS).toBeLessThan(BASH_TIMEOUT_CEILING_MS);
+    expect(DEFAULT_TIMEOUT_SEC * 1000).toBeLessThan(RESCUE_BASH_TIMEOUT_MS);
+    // Enough headroom for the runtime to finish writing its result.
+    expect(RESCUE_BASH_TIMEOUT_MS - DEFAULT_TIMEOUT_SEC * 1000).toBeGreaterThanOrEqual(60_000);
   });
 
   it('collapseCommandArgv splits the post -- string with quote handling', () => {

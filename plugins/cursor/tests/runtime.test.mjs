@@ -125,6 +125,158 @@ describe('cursor companion runtime', () => {
     expect(job.resultText).toMatch(/APPROVE WITH NITS/);
   });
 
+  it('review invokes cursor-agent read-only and never write-capable', async () => {
+    // /cursor:review promises the user it will not change anything. `--mode ask`
+    // is what enforces that, and `--force` would override it.
+    process.env.CURSOR_AGENT_STUB_FIXTURE = REVIEW_HAPPY_FIXTURE;
+    const argvLog = join(tmp.dir, 'review-argv.json');
+    process.env.CURSOR_AGENT_STUB_ARGV_LOG = argvLog;
+    initRepo(tmp.dir);
+    writeFileSync(join(tmp.dir, 'README.md'), 'hello again\n');
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await reviewMain(['--wait']);
+    } finally {
+      outSpy.mockRestore();
+    }
+    const argv = JSON.parse(readFileSync(argvLog, 'utf8'));
+    expect(argv).toContain('--mode');
+    expect(argv[argv.indexOf('--mode') + 1]).toBe('ask');
+    expect(argv).not.toContain('--force');
+    expect(argv).not.toContain('--yolo');
+  });
+
+  it('writes the diff to a file and points the prompt at it when it cannot inline', async () => {
+    // Read-only runs have no shell. With MAX_INLINE_FILES = 2, any review of 3+
+    // files used to fall back to "inspect it yourself", which under --mode ask
+    // means the agent never sees base versions or deleted content.
+    process.env.CURSOR_AGENT_STUB_FIXTURE = REVIEW_HAPPY_FIXTURE;
+    initRepo(tmp.dir);
+    for (const name of ['one.txt', 'two.txt', 'three.txt', 'four.txt']) {
+      writeFileSync(join(tmp.dir, name), `content of ${name}\n`);
+    }
+    git(tmp.dir, ['add', '.']);
+    git(tmp.dir, ['commit', '--quiet', '-m', 'four files']);
+    writeFileSync(join(tmp.dir, 'one.txt'), 'changed one\n');
+    writeFileSync(join(tmp.dir, 'two.txt'), 'changed two\n');
+    writeFileSync(join(tmp.dir, 'three.txt'), 'changed three\n');
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await reviewMain(['--wait']);
+    } finally {
+      outSpy.mockRestore();
+    }
+    const job = listJobs(tmp.dir)[0];
+    const match = job.prompt.match(/complete diff is written to (\S+?)\. Read/);
+    expect(match, 'prompt should name a diff file').not.toBeNull();
+    const diff = readFileSync(match[1], 'utf8');
+    // The real diff, with base content, not just a file listing.
+    expect(diff).toMatch(/^--- a\/one\.txt$/m);
+    expect(diff).toMatch(/^-content of one\.txt$/m);
+    expect(diff).toMatch(/^\+changed one$/m);
+    expect(job.prompt).not.toMatch(/inspect the target diff yourself/i);
+  });
+
+  it('renders the stored result from status --wait so background rescue delivers an answer', async () => {
+    process.env.CURSOR_AGENT_STUB_FIXTURE = HAPPY_FIXTURE;
+    initRepo(tmp.dir);
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await rescueMain(['--', 'do a thing']);
+    } finally {
+      outSpy.mockRestore();
+    }
+    const job = listJobs(tmp.dir)[0];
+    expect(job.status).toBe('completed');
+    const chunks = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c) => {
+      chunks.push(String(c));
+      return true;
+    });
+    try {
+      await companionMain(['status', job.id, '--wait']);
+    } finally {
+      spy.mockRestore();
+    }
+    // Without this, `status --wait` returned status and prompt but never the answer.
+    expect(chunks.join('')).toContain(job.resultText.trim().split('\n')[0]);
+  });
+
+  it('streams [cursor] progress to stderr during a foreground run', async () => {
+    // A silent foreground run is the difference between a subagent and a frozen
+    // shell command. Progress must go to stderr so stdout stays the clean payload.
+    process.env.CURSOR_AGENT_STUB_FIXTURE = HAPPY_FIXTURE;
+    initRepo(tmp.dir);
+    const stderrLines = [];
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      stderrLines.push(String(chunk));
+      return true;
+    });
+    const stdoutChunks = [];
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    });
+    try {
+      await rescueMain(['--', 'do a thing']);
+    } finally {
+      outSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+    const progress = stderrLines.filter((line) => line.startsWith('[cursor] '));
+    expect(progress.length).toBeGreaterThanOrEqual(2);
+    expect(progress.join('')).toMatch(/starting \(model /);
+    expect(stdoutChunks.join('')).not.toMatch(/\[cursor\] /);
+  });
+
+  it('suppresses the progress feed under --json', async () => {
+    process.env.CURSOR_AGENT_STUB_FIXTURE = HAPPY_FIXTURE;
+    initRepo(tmp.dir);
+    const stderrLines = [];
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      stderrLines.push(String(chunk));
+      return true;
+    });
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await rescueMain(['--json', '--', 'do a thing']);
+    } finally {
+      outSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+    expect(stderrLines.filter((line) => line.startsWith('[cursor] '))).toHaveLength(0);
+  });
+
+  it('records the cursor-agent pid so cancel can reach its process group', async () => {
+    process.env.CURSOR_AGENT_STUB_FIXTURE = HAPPY_FIXTURE;
+    initRepo(tmp.dir);
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await rescueMain(['--', 'do a thing']);
+    } finally {
+      outSpy.mockRestore();
+    }
+    expect(typeof listJobs(tmp.dir)[0].agentPid).toBe('number');
+  });
+
+  it('keeps a job completed when the runtime reaps a lingering cursor-agent', async () => {
+    // The post-result watchdog fires on healthy runs where cursor-agent does not
+    // self-exit. That reap is normal and must not report the job as failed.
+    process.env.CURSOR_AGENT_STUB_FIXTURE = HAPPY_FIXTURE;
+    process.env.CURSOR_AGENT_STUB_HANG = '1';
+    initRepo(tmp.dir);
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await rescueMain(['--', 'do a thing']);
+    } finally {
+      outSpy.mockRestore();
+      delete process.env.CURSOR_AGENT_STUB_HANG;
+    }
+    const job = listJobs(tmp.dir)[0];
+    expect(job.status).toBe('completed');
+    expect(job.exitCode).toBe(0);
+  }, 20_000);
+
   it('normal review supports branch diffs with --base', async () => {
     process.env.CURSOR_AGENT_STUB_FIXTURE = REVIEW_HAPPY_FIXTURE;
     initRepo(tmp.dir);

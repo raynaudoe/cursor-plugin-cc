@@ -171,7 +171,8 @@ function untrackedSection(cwd, files) {
  * @property {string} [body]       Markdown diff context for the prompt.
  * @property {string[]} [changedFiles]
  * @property {boolean} [truncated]
- * @property {'inline-diff'|'self-collect'} [inputMode]
+ * @property {'inline-diff'|'diff-file'} [inputMode]
+ * @property {string} [fullDiff]   Set when the diff was too large to inline.
  * @property {string} [collectionGuidance]
  * @property {boolean} [isEmpty]   True when there is nothing to review.
  * @property {string} [error]      Set when the target could not be resolved.
@@ -181,7 +182,7 @@ function untrackedSection(cwd, files) {
  * Resolve and collect the git context for a review.
  *
  * @param {string} cwd
- * @param {{scope?: 'auto'|'working-tree'|'branch', base?: string|null, maxDiffBytes?: number}} [opts]
+ * @param {{scope?: 'auto'|'working-tree'|'branch', base?: string|null, maxDiffBytes?: number, maxInlineFiles?: number}} [opts]
  * @returns {Promise<ReviewContext>}
  */
 export async function collectReviewContext(cwd, opts = {}) {
@@ -250,10 +251,12 @@ export async function collectReviewContext(cwd, opts = {}) {
       body,
       changedFiles,
       truncated,
-      inputMode: includeDiff ? 'inline-diff' : 'self-collect',
-      collectionGuidance: includeDiff
-        ? 'Use the inline diff below as primary evidence.'
-        : 'The context below is a lightweight summary. Inspect the target diff yourself with read-only git commands before finalizing.',
+      inputMode: includeDiff ? 'inline-diff' : 'diff-file',
+      // A diff too large to inline is handed back so the caller can persist it
+      // somewhere the agent can open. Read-only runs have no shell, so without
+      // this a multi-file review sees file names and current contents but never
+      // the base versions, ie. never what actually changed.
+      ...(includeDiff ? {} : { fullDiff: rawDiff }),
       isEmpty: false,
     };
   }
@@ -291,10 +294,8 @@ export async function collectReviewContext(cwd, opts = {}) {
     body,
     changedFiles,
     truncated,
-    inputMode: includeDiff ? 'inline-diff' : 'self-collect',
-    collectionGuidance: includeDiff
-      ? 'Use the inline diff below as primary evidence.'
-      : 'The context below is a lightweight summary. Inspect the target diff yourself with read-only git commands before finalizing.',
+    inputMode: includeDiff ? 'inline-diff' : 'diff-file',
+    ...(includeDiff ? {} : { fullDiff: rawDiff }),
     isEmpty: false,
   };
 }

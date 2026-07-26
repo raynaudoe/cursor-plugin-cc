@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { openSync } from 'node:fs';
+import { closeSync, openSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { collapseCommandArgv, parseArgv, parseTimeout } from './lib/args.mjs';
+import { parseCommandArgv, parseTimeout } from './lib/args.mjs';
 import {
   authStatus,
   listConfiguredMcps,
@@ -16,6 +17,8 @@ import { id as newId } from './lib/id.mjs';
 import {
   cancelJob,
   createJob,
+  filterForSession,
+  isActiveStatus,
   listJobs,
   rawLogPath as rawLogPathFor,
   readJob,
@@ -23,10 +26,13 @@ import {
 } from './lib/jobs.mjs';
 import { mdCell } from './lib/md.mjs';
 import { ensureDir, jobsDir, logsDir, pluginHome } from './lib/paths.mjs';
-import { extractChatId, summariseEvents, walkToolUses } from './lib/parse.mjs';
+import { chatIdFromEvent, extractChatId, summariseEvents, walkToolUses } from './lib/parse.mjs';
 import { run } from './lib/run.mjs';
 
-const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240_000;
+// Must exceed the runtime watchdog (DEFAULT_TIMEOUT_SEC) or `status --wait`
+// gives up before the job it is waiting on can possibly finish, while still
+// fitting inside the Bash timeout the rescue prompts set.
+const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 540_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_CONTINUE_PROMPT =
   'Continue from the current Cursor chat state. Pick the next highest-value step and follow through until the task is resolved.';
@@ -38,22 +44,27 @@ function output(value, asJson = false) {
   process.stdout.write(asJson ? `${JSON.stringify(value, null, 2)}\n` : value);
 }
 
-function parseCommandInput(argv, booleans = []) {
-  return parseArgv(collapseCommandArgv(argv), booleans);
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isActiveStatus(status) {
-  return status === 'queued' || status === 'running';
+// Advisory warnings (and the runtime's own post-result reap) must never flip a
+// successful run to `failed` — they are reported alongside the result instead.
+// Only a non-zero exit, an unsuccessful transcript, or a timeout kill fails a job.
+function completionStatus(exitCode, summary, killed = false) {
+  return exitCode === 0 && summary.success && !killed ? 'completed' : 'failed';
 }
 
-function completionStatus(exitCode, summary, killed, warnings = []) {
-  return exitCode === 0 && summary.success && !killed && warnings.length === 0
-    ? 'completed'
-    : 'failed';
+// Live progress for the humans (and the model) watching the tool call. Without
+// this a foreground run is a frozen Bash call for its entire duration, which is
+// the single biggest reason the plugin reads as an external console process
+// rather than a subagent. Mirrors the Codex companion's `[codex] …` stderr feed.
+function createProgressReporter(enabled) {
+  if (!enabled) return () => {};
+  return (message) => {
+    if (!message) return;
+    process.stderr.write(`[cursor] ${message}\n`);
+  };
 }
 
 function nowIso() {
@@ -90,12 +101,18 @@ function formatElapsedDuration(startValue, endValue = null) {
   return `${rest}s`;
 }
 
+// Session-scoped views. Explicit `<job-id>` lookups deliberately search the
+// unfiltered list so a user can always reach a job they know the id of.
+function sessionJobs(repo) {
+  return filterForSession(listJobs(repo));
+}
+
 function activeJobs(repo) {
-  return listJobs(repo).filter((job) => isActiveStatus(job.status));
+  return sessionJobs(repo).filter((job) => isActiveStatus(job.status));
 }
 
 function finishedJobs(repo) {
-  return listJobs(repo).filter((job) => !isActiveStatus(job.status));
+  return sessionJobs(repo).filter((job) => !isActiveStatus(job.status));
 }
 
 function matchJobReference(jobs, reference, predicate = () => true) {
@@ -170,27 +187,24 @@ function pushJobDetails(lines, raw, options = {}) {
   lines.push(`- ${job.id} | ${job.status} | ${job.kindLabel}${job.title ? ` | ${job.title}` : ''}`);
   if (job.summary) lines.push(`  Summary: ${job.summary}`);
   if (job.phase) lines.push(`  Phase: ${job.phase}`);
-  if (options.showElapsed && job.elapsed) lines.push(`  Elapsed: ${job.elapsed}`);
-  if (options.showDuration && job.duration) lines.push(`  Duration: ${job.duration}`);
+  const active = isActiveStatus(job.status);
+  if (active && job.elapsed) lines.push(`  Elapsed: ${job.elapsed}`);
+  if (!active && job.duration) lines.push(`  Duration: ${job.duration}`);
   if (job.cursorChatId) {
     lines.push(`  Cursor chat ID: ${job.cursorChatId}`);
     lines.push(`  Resume in Cursor: ${resumeCommand(job)}`);
   }
   if (job.rawLogPath && options.showLog) lines.push(`  Raw log: ${job.rawLogPath}`);
-  if (isActiveStatus(job.status) && options.showCancelHint) {
-    lines.push(`  Cancel: /cursor:cancel ${job.id}`);
-  }
-  if (!isActiveStatus(job.status) && options.showResultHint) {
-    lines.push(`  Result: /cursor:result ${job.id}`);
-  }
-  if (!isActiveStatus(job.status) && job.jobClass === 'task' && options.showReviewHint) {
+  if (active) lines.push(`  Cancel: /cursor:cancel ${job.id}`);
+  if (!active) lines.push(`  Result: /cursor:result ${job.id}`);
+  if (!active && job.jobClass === 'task' && options.showReviewHint) {
     lines.push('  Review changes: /cursor:review --wait');
     lines.push('  Stricter review: /cursor:adversarial-review --wait');
   }
 }
 
 function renderStatusReport(repo, { all = false } = {}) {
-  const jobs = listJobs(repo);
+  const jobs = sessionJobs(repo);
   const running = jobs.filter((job) => isActiveStatus(job.status));
   const latestFinished = jobs.find((job) => !isActiveStatus(job.status)) ?? null;
   const recent = (all ? jobs : jobs.slice(0, 8)).filter(
@@ -204,7 +218,7 @@ function renderStatusReport(repo, { all = false } = {}) {
     lines.push('');
     lines.push('Live details:');
     for (const job of running) {
-      pushJobDetails(lines, job, { showElapsed: true, showLog: true, showCancelHint: true });
+      pushJobDetails(lines, job, { showLog: true });
     }
     lines.push('');
   }
@@ -212,9 +226,7 @@ function renderStatusReport(repo, { all = false } = {}) {
   if (latestFinished) {
     lines.push('Latest finished:');
     pushJobDetails(lines, latestFinished, {
-      showDuration: true,
       showLog: latestFinished.status === 'failed',
-      showResultHint: true,
       showReviewHint: true,
     });
     lines.push('');
@@ -223,11 +235,7 @@ function renderStatusReport(repo, { all = false } = {}) {
   if (recent.length > 0) {
     lines.push('Recent jobs:');
     for (const job of recent) {
-      pushJobDetails(lines, job, {
-        showDuration: true,
-        showLog: job.status === 'failed',
-        showResultHint: true,
-      });
+      pushJobDetails(lines, job, { showLog: job.status === 'failed' });
     }
   } else if (running.length === 0 && !latestFinished) {
     lines.push('No Cursor jobs recorded yet.');
@@ -238,20 +246,19 @@ function renderStatusReport(repo, { all = false } = {}) {
 
 function renderSingleJob(job) {
   const lines = ['# Cursor Job Status', ''];
-  pushJobDetails(lines, job, {
-    showElapsed: isActiveStatus(job.status),
-    showDuration: !isActiveStatus(job.status),
-    showLog: true,
-    showCancelHint: true,
-    showResultHint: true,
-    showReviewHint: true,
-  });
-  if (job.prompt) {
-    lines.push('', 'Prompt:', '', job.prompt);
+  pushJobDetails(lines, job, { showLog: true, showReviewHint: true });
+  // A finished job's status page must carry its actual output. `status --wait`
+  // is how a backgrounded rescue delivers Cursor's answer, and without this it
+  // returned everything except the answer.
+  if (!isActiveStatus(job.status) && job.resultText) {
+    lines.push('', 'Result:', '', String(job.resultText).trim());
   }
   if (job.filesTouched?.length) {
     lines.push('', 'Files touched:');
     for (const file of job.filesTouched) lines.push(`- ${file}`);
+  }
+  if (job.prompt) {
+    lines.push('', 'Prompt:', '', job.prompt);
   }
   return `${lines.join('\n').trimEnd()}\n`;
 }
@@ -259,6 +266,12 @@ function renderSingleJob(job) {
 function renderStoredResult(job) {
   const text = String(job.resultText ?? job.summary ?? '(no final output captured)').trim();
   const lines = [text];
+  // Whether Cursor edited anything is the first thing a reader needs, and it was
+  // stored but never surfaced.
+  if (job.filesTouched?.length) {
+    lines.push('', `Files touched by Cursor (${job.filesTouched.length}):`);
+    for (const file of job.filesTouched) lines.push(`- ${file}`);
+  }
   const command = resumeCommand(job);
   if (command) {
     lines.push('', `Cursor chat ID: ${job.cursorChatId}`, `Resume in Cursor: ${command}`);
@@ -274,6 +287,9 @@ function renderCancelReport(job) {
     '',
     job.title ? `- Title: ${job.title}` : null,
     job.summary ? `- Summary: ${job.summary}` : null,
+    job.cancelSignalled === false
+      ? '- No live process was found; the job record was already stale and has been tidied up.'
+      : null,
     '- Check `/cursor:status` for the updated queue.',
   ]
     .filter(Boolean)
@@ -301,6 +317,16 @@ function parseStructuredReview(text) {
       return {
         parsed: null,
         parseError: 'Missing `findings` or `next_steps` array.',
+        rawOutput: text,
+      };
+    }
+    // The renderer sorts and dereferences these directly, so a null or scalar
+    // element is a TypeError mid-render. Fall back to the raw-output branch,
+    // which loses nothing, rather than dropping elements the model produced.
+    if (parsed.findings.some((f) => !f || typeof f !== 'object' || Array.isArray(f))) {
+      return {
+        parsed: null,
+        parseError: '`findings` must contain objects.',
         rawOutput: text,
       };
     }
@@ -652,13 +678,25 @@ function renderDebateReport({ request, turns, consensusReached, warnings = [] })
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
-function buildReviewPrompt({ context, adversarial = false, focusText = '' }) {
+// Read-only runs have no shell, so the agent cannot recover base versions or
+// deleted content on its own. When the diff did not fit inline, point it at the
+// file instead: the read tool still works in `--mode ask`.
+function diffSourceGuidance(context, diffPath) {
+  if (diffPath) {
+    return `The complete diff is written to ${diffPath}. Read that file first — it is the authoritative record of what changed. You cannot run shell commands, so do not attempt to reconstruct the diff with git.`;
+  }
+  if (context.inputMode === 'inline-diff') return 'Use the inline diff below as primary evidence.';
+  return context.collectionGuidance ?? '';
+}
+
+function buildReviewPrompt({ context, adversarial = false, focusText = '', diffPath = null }) {
+  const guidance = diffSourceGuidance(context, diffPath);
   if (!adversarial) {
     return [
       'You are a senior code reviewer.',
       '',
       `Review target: ${context.label}`,
-      context.collectionGuidance ? `Context mode: ${context.collectionGuidance}` : '',
+      guidance ? `Context mode: ${guidance}` : '',
       '',
       'Review ONLY the changes below, not the entire codebase.',
       '',
@@ -672,7 +710,7 @@ function buildReviewPrompt({ context, adversarial = false, focusText = '' }) {
       '',
       'Hard constraints:',
       '- This is a READ-ONLY review. Do not modify, create, delete, stage, or commit files.',
-      '- If the diff context is lightweight or truncated, inspect specific files or git diff output read-only before finalizing.',
+      '- You cannot run shell commands. Use file reads for any extra context you need.',
     ].join('\n');
   }
 
@@ -685,13 +723,13 @@ function buildReviewPrompt({ context, adversarial = false, focusText = '' }) {
     '<task>',
     `Review target: ${context.label}`,
     `User focus: ${focusText || 'No extra focus provided.'}`,
-    context.collectionGuidance ? `Context mode: ${context.collectionGuidance}` : '',
+    guidance ? `Context mode: ${guidance}` : '',
     'Review the provided repository context and challenge whether this change should ship.',
     '</task>',
     '',
     '<review_method>',
     'Prioritize correctness, security, data loss, rollback safety, race conditions, stale state, version skew, and missing observability.',
-    'If the context is lightweight or truncated, inspect the target diff yourself with read-only commands before finalizing.',
+    'You cannot run shell commands. Use file reads for any extra context you need.',
     '</review_method>',
     '',
     '<structured_output_contract>',
@@ -728,17 +766,22 @@ function postFlightWarnings(summary, request) {
 }
 
 function toolPhase(ev) {
+  // `investigating` is the fallback, not an early return: returning it from the
+  // first loop iteration made every event after the first read report the same
+  // phase forever, so the phase never advanced past `investigating`.
+  let phase = null;
   for (const tool of walkToolUses(ev)) {
     const name = String(tool.name ?? '').toLowerCase();
     if (/write|edit|patch|create|file/.test(name)) return 'editing';
     if (/test|lint|build|typecheck|check|verify/.test(name)) return 'verifying';
-    return 'investigating';
+    phase = 'investigating';
   }
-  return null;
+  return phase;
 }
 
-async function runCursorRequest(root, jobId, request) {
+async function runCursorRequest(root, jobId, request, options = {}) {
   const logPath = rawLogPathFor(root, jobId);
+  const progress = createProgressReporter(options.progressToStderr === true);
   ensureDir(jobsDir(root));
   ensureDir(logsDir(root));
   updateJob(root, jobId, {
@@ -748,25 +791,39 @@ async function runCursorRequest(root, jobId, request) {
     model: request.model,
   });
 
+  progress(
+    `${request.title} starting (model ${request.model}${request.readOnly ? ', read-only' : ''})`,
+  );
+
   let lastPhase = 'starting';
+  let lastChatId = null;
   const result = await runHeadless({
     prompt: request.prompt,
     model: request.model,
     resumeChatId: request.resumeChatId,
     resumeLatest: request.resumeLatest,
-    cloud: request.cloud,
+    readOnly: request.readOnly === true,
     force: request.force !== false,
     timeoutSec: request.timeoutSec,
     logPath,
+    onSpawn: (pid) => {
+      updateJob(root, jobId, { agentPid: pid });
+    },
     onEvent: (ev) => {
-      const chatId = ev.chat_id ?? ev.chatId ?? ev.session_id ?? ev.sessionId;
-      if (typeof chatId === 'string' && chatId.length > 0) {
+      const chatId = chatIdFromEvent(ev);
+      // Real cursor-agent stamps the chat id on EVERY streamed line, so without
+      // this guard the job file is read, re-serialised and renamed once per
+      // event for the whole run.
+      if (typeof chatId === 'string' && chatId.length > 0 && chatId !== lastChatId) {
+        lastChatId = chatId;
         updateJob(root, jobId, { cursorChatId: chatId });
+        progress(`chat ${chatId}`);
       }
       const nextPhase = toolPhase(ev);
       if (nextPhase && nextPhase !== lastPhase) {
         lastPhase = nextPhase;
         updateJob(root, jobId, { phase: nextPhase });
+        progress(nextPhase);
       }
     },
   });
@@ -776,11 +833,12 @@ async function runCursorRequest(root, jobId, request) {
   const warnings = postFlightWarnings(summary, request);
   if (result.killed) {
     warnings.push(
-      'The run was killed by timeout or the post-result watchdog before it fully exited; output may be incomplete.',
+      `The run hit the ${request.timeoutSec}s timeout and was killed before finishing; output may be incomplete.`,
     );
   }
 
-  const status = completionStatus(result.exitCode, summary, result.killed, warnings);
+  const status = completionStatus(result.exitCode, summary, result.killed);
+  progress(`${status} (exit ${result.exitCode})`);
   let resultText = summary.summary;
   if (request.structuredReview) {
     resultText = renderStructuredReview(parseStructuredReview(summary.summary), {
@@ -807,8 +865,9 @@ async function runCursorRequest(root, jobId, request) {
   return { result, summary, status, chatId, warnings, resultText };
 }
 
-async function runDebateRequest(root, jobId, request) {
+async function runDebateRequest(root, jobId, request, options = {}) {
   const logPath = rawLogPathFor(root, jobId);
+  const progress = createProgressReporter(options.progressToStderr === true);
   ensureDir(jobsDir(root));
   ensureDir(logsDir(root));
   updateJob(root, jobId, {
@@ -871,7 +930,9 @@ async function runDebateRequest(root, jobId, request) {
         phase: `round ${round}: ${participant.label}`,
         summary: `Round ${round}: ${participant.label}`,
       });
+      progress(`round ${round}/${request.debate.maxRounds}: ${participant.label} thinking`);
 
+      let lastChatId = null;
       const result = await runHeadless({
         prompt: buildDebateTurnPrompt({
           issue: request.debate.issue,
@@ -882,12 +943,18 @@ async function runDebateRequest(root, jobId, request) {
           transcript: turns,
         }),
         model: participant.model,
-        force: true,
+        // A debate is advisory: `/cursor:debate` promises the user a read-only
+        // run, so it must not be able to touch the working tree.
+        readOnly: true,
         timeoutSec: request.timeoutSec,
         logPath,
+        onSpawn: (pid) => {
+          updateJob(root, jobId, { agentPid: pid });
+        },
         onEvent: (ev) => {
-          const chatId = ev.chat_id ?? ev.chatId ?? ev.session_id ?? ev.sessionId;
-          if (typeof chatId === 'string' && chatId.length > 0) {
+          const chatId = chatIdFromEvent(ev);
+          if (typeof chatId === 'string' && chatId.length > 0 && chatId !== lastChatId) {
+            lastChatId = chatId;
             updateJob(root, jobId, { cursorChatId: chatId });
           }
         },
@@ -900,7 +967,7 @@ async function runDebateRequest(root, jobId, request) {
       warnings.push(...turnWarnings);
       if (result.killed) {
         warnings.push(
-          `${participant.label} round ${round}: cursor-agent was killed before it fully exited; output may be incomplete.`,
+          `${participant.label} round ${round}: cursor-agent hit the ${request.timeoutSec}s timeout and was killed; output may be incomplete.`,
         );
       }
       if (result.exitCode !== 0 || !summary.success) {
@@ -952,8 +1019,10 @@ async function runDebateRequest(root, jobId, request) {
   }
 
   const files = uniqueStrings(filesTouched);
-  const status = exitCode === 0 && !killed && warnings.length === 0 ? 'completed' : 'failed';
+  // Advisory warnings do not fail a debate that ran to completion.
+  const status = exitCode === 0 && !killed ? 'completed' : 'failed';
   const resultText = renderDebateReport({ request, turns, consensusReached, warnings });
+  progress(`${status}${consensusReached ? ' (consensus)' : ''} after ${turns.length} turn(s)`);
   const finalExitCode = status === 'completed' ? 0 : exitCode || 1;
   updateJob(root, jobId, {
     status,
@@ -984,12 +1053,26 @@ async function runDebateRequest(root, jobId, request) {
   };
 }
 
+// Persisted next to the job logs so it lives under the documented
+// ~/.cursor-plugin-cc/jobs/<repo-hash>/ layout and is swept by the same pruning.
+function writeDiffFile(root, diff) {
+  if (typeof diff !== 'string' || diff.length === 0) return null;
+  ensureDir(logsDir(root));
+  const path = join(logsDir(root), `${newId(10)}.diff`);
+  writeFileSync(path, diff, 'utf8');
+  return path;
+}
+
 function createTrackedJob(root, request, status = 'running') {
   const jobId = newId(10);
+  // `prompt` is already a top-level column; keeping a second copy inside
+  // `request` doubles every job file (a review prompt carries up to 256 KiB of
+  // diff) and `listJobs` re-parses every file on each status/result/cancel.
+  const { prompt, ...storedRequest } = request;
   createJob({
     id: jobId,
     repoPath: root,
-    prompt: request.prompt,
+    prompt,
     model: request.model,
     status,
     kind: request.kind,
@@ -998,7 +1081,7 @@ function createTrackedJob(root, request, status = 'running') {
     title: request.title,
     phase: status === 'queued' ? 'queued' : 'starting',
     summary: request.initialSummary,
-    request,
+    request: storedRequest,
     background: status === 'queued',
   });
   return jobId;
@@ -1015,21 +1098,57 @@ function spawnWorker(root, jobId, subcommand) {
     detached: true,
     stdio: ['ignore', out, err],
     env: process.env,
+    windowsHide: true,
   });
+  // A failed spawn emits 'error' asynchronously; with no listener that is an
+  // uncaught exception for any in-process caller (the tests call main() directly).
+  child.on('error', () => {});
   child.unref();
-  return child.pid ?? -1;
+  // The child owns dup'd descriptors once spawn() has returned.
+  closeSync(out);
+  closeSync(err);
+  // Never return a non-positive sentinel: it is persisted as `job.pid` and later
+  // fed to process.kill(), where -1 broadcasts to every process this user owns.
+  if (!Number.isInteger(child.pid) || child.pid <= 0) return null;
+  return child.pid;
+}
+
+// A throw between `status: running` and the completion update would otherwise
+// leave the record active forever: /cursor:status lists a phantom job that
+// /cursor:result refuses and bare /cursor:cancel then reports as ambiguous.
+async function executeRequest(root, jobId, request, options) {
+  try {
+    return request.jobClass === 'debate'
+      ? await runDebateRequest(root, jobId, request, options)
+      : await runCursorRequest(root, jobId, request, options);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    try {
+      updateJob(root, jobId, {
+        status: 'failed',
+        exitCode: 1,
+        completedAt: nowIso(),
+        finishedAt: nowIso(),
+        phase: 'failed',
+        summary: `${request.title} failed: ${message}`,
+        resultText: `${request.title} failed before it could produce a result.\n\n${message}\n`,
+      });
+    } catch {
+      // The record write failed too (often the same disk/permission fault).
+      // Losing the status update is bad; losing the real cause is worse.
+    }
+    throw err;
+  }
 }
 
 async function runJobForeground(root, request, { json = false } = {}) {
   const jobId = createTrackedJob(root, request, 'running');
-  const execution =
-    request.jobClass === 'debate'
-      ? await runDebateRequest(root, jobId, request)
-      : await runCursorRequest(root, jobId, request);
+  // Progress goes to stderr so it never contaminates the stdout payload the
+  // slash commands return verbatim, and is suppressed under --json.
+  const execution = await executeRequest(root, jobId, request, { progressToStderr: !json });
   const job = readJob(root, jobId);
   const payload = { job, ...execution };
   output(json ? payload : renderStoredResult(job), json);
-  if (execution.result.exitCode !== 0) process.exitCode = execution.result.exitCode;
   return execution.result.exitCode;
 }
 
@@ -1039,13 +1158,31 @@ async function runJobWorker(root, jobId) {
   if (!job.request || typeof job.request !== 'object') {
     throw new Error(`Stored job ${jobId} is missing its request payload.`);
   }
-  if (job.request.jobClass === 'debate') await runDebateRequest(root, jobId, job.request);
-  else await runCursorRequest(root, jobId, job.request);
+  // The detached worker's stderr is redirected to `<log>.stderr`, so the same
+  // progress feed becomes the background job's trace file.
+  // Records written before the prompt was de-duplicated still carry it inside
+  // `request`; newer ones read it back from the top-level column.
+  const request = { ...job.request, prompt: job.request.prompt ?? job.prompt };
+  await executeRequest(root, jobId, request, { progressToStderr: true });
 }
 
 function queueJob(root, request, workerSubcommand, json = false) {
   const jobId = createTrackedJob(root, request, 'queued');
   const pid = spawnWorker(root, jobId, workerSubcommand);
+  if (pid === null) {
+    // Nothing is running, so do not report a queued job the user will wait on.
+    updateJob(root, jobId, {
+      status: 'failed',
+      exitCode: 1,
+      phase: 'failed',
+      completedAt: nowIso(),
+      finishedAt: nowIso(),
+      summary: 'Background worker failed to start.',
+    });
+    throw new Error(
+      `Could not start the background worker for job ${jobId}. Re-run without --background to see the failure.`,
+    );
+  }
   updateJob(root, jobId, { pid });
   const rendered = `${request.title} started in the background as ${jobId}. Check /cursor:status ${jobId} for progress.\n`;
   output(
@@ -1068,7 +1205,7 @@ async function ensureGitForCommand(cwd) {
 }
 
 function parseReviewFlags(argv) {
-  const { positional, flags } = parseCommandInput(argv, ['background', 'wait', 'json']);
+  const { positional, flags } = parseCommandArgv(argv, ['background', 'wait', 'json']);
   return {
     focusText: positional.join(' ').trim(),
     base: typeof flags.base === 'string' ? flags.base : undefined,
@@ -1099,9 +1236,16 @@ async function buildReviewRequest(root, flags, adversarial) {
     title: adversarial ? 'Cursor Adversarial Review' : 'Cursor Review',
     targetLabel: context.label,
     initialSummary: `${adversarial ? 'Adversarial review' : 'Review'} ${context.label}`,
-    prompt: buildReviewPrompt({ context, adversarial, focusText: flags.focusText }),
+    prompt: buildReviewPrompt({
+      context,
+      adversarial,
+      focusText: flags.focusText,
+      diffPath: writeDiffFile(root, context.fullDiff),
+    }),
     model: flags.model,
-    force: true,
+    // Review commands promise the user they will not change anything. Enforce it
+    // at the CLI rather than trusting the prompt.
+    readOnly: true,
     timeoutSec: flags.timeoutSec,
     structuredReview: adversarial,
   };
@@ -1191,7 +1335,7 @@ function parseDebateModelInputs(flags) {
 }
 
 function parseDebateFlags(argv) {
-  const { positional, flags } = parseCommandInput(argv, ['background', 'wait', 'json']);
+  const { positional, flags } = parseCommandArgv(argv, ['background', 'wait', 'json']);
   const requestedModels = parseDebateModelInputs(flags);
   const resolvedModels = requestedModels.map((model) => resolveModel(model));
   if (resolvedModels[0] === resolvedModels[1]) {
@@ -1237,7 +1381,7 @@ function buildDebateRequest(flags) {
     initialSummary: `Debate: ${shorten(flags.issue)}`,
     prompt: flags.issue,
     model: flags.resolvedModels.join(','),
-    force: true,
+    readOnly: true,
     timeoutSec: flags.timeoutSec,
     debate: {
       issue: flags.issue,
@@ -1258,7 +1402,7 @@ async function handleDebate(argv) {
 }
 
 function parseTaskFlags(argv) {
-  const { positional, flags } = parseCommandInput(argv, [
+  const { positional, flags } = parseCommandArgv(argv, [
     'background',
     'wait',
     'json',
@@ -1282,18 +1426,14 @@ function parseTaskFlags(argv) {
   };
 }
 
-function latestResumableTask(root, excludeJobId = null) {
-  return listJobs(root).find(
-    (job) =>
-      job.id !== excludeJobId &&
-      job.jobClass === 'task' &&
-      job.cursorChatId &&
-      !isActiveStatus(job.status),
+function latestResumableTask(root) {
+  return sessionJobs(root).find(
+    (job) => job.jobClass === 'task' && job.cursorChatId && !isActiveStatus(job.status),
   );
 }
 
-function buildTaskRequest(root, flags, jobId = null) {
-  const latest = flags.resumeLast && !flags.resumeChatId ? latestResumableTask(root, jobId) : null;
+function buildTaskRequest(root, flags) {
+  const latest = flags.resumeLast && !flags.resumeChatId ? latestResumableTask(root) : null;
   if (flags.resumeLast && !flags.resumeChatId && !latest) {
     throw new Error('No previous Cursor rescue thread was found for this repository.');
   }
@@ -1330,7 +1470,7 @@ async function handleTask(argv) {
 }
 
 function handleTaskResumeCandidate(argv) {
-  const { flags } = parseCommandInput(argv, ['json']);
+  const { flags } = parseCommandArgv(argv, ['json']);
   const root = repoRoot(process.cwd());
   return root.then((repo) => {
     const candidate = latestResumableTask(repo);
@@ -1360,14 +1500,14 @@ function handleTaskResumeCandidate(argv) {
 }
 
 async function handleStatus(argv) {
-  const { positional, flags } = parseCommandInput(argv, ['json', 'all', 'wait']);
+  const { positional, flags } = parseCommandArgv(argv, ['json', 'all', 'wait']);
   const root = await repoRoot(process.cwd());
   const reference = positional[0] ?? '';
   if (!reference) {
     if (flags.wait) throw new Error('`status --wait` requires a job id.');
     output(
       flags.json
-        ? { jobs: listJobs(root).map(enrichJob) }
+        ? { jobs: sessionJobs(root).map(enrichJob) }
         : renderStatusReport(root, { all: Boolean(flags.all) }),
       Boolean(flags.json),
     );
@@ -1397,7 +1537,7 @@ async function handleStatus(argv) {
 }
 
 async function handleResult(argv) {
-  const { positional, flags } = parseCommandInput(argv, ['json']);
+  const { positional, flags } = parseCommandArgv(argv, ['json']);
   const root = await repoRoot(process.cwd());
   const reference = positional[0] ?? '';
   const jobs = reference ? listJobs(root) : finishedJobs(root);
@@ -1419,10 +1559,14 @@ async function handleResult(argv) {
 }
 
 async function handleCancel(argv) {
-  const { positional, flags } = parseCommandInput(argv, ['json']);
+  const { positional, flags } = parseCommandArgv(argv, ['json']);
   const root = await repoRoot(process.cwd());
   const reference = positional[0] ?? '';
-  const jobs = activeJobs(root);
+  // Explicit ids search every session's jobs, matching status/result; the
+  // no-argument form stays scoped to this session.
+  const jobs = reference
+    ? listJobs(root).filter((job) => isActiveStatus(job.status))
+    : activeJobs(root);
   let target;
   if (reference) {
     target = matchJobReference(jobs, reference);
@@ -1510,7 +1654,7 @@ function renderSetupReport(report) {
 }
 
 async function handleSetup(argv) {
-  const { flags } = parseCommandInput(argv, ['json', 'print-models']);
+  const { flags } = parseCommandArgv(argv, ['json', 'print-models']);
   const payload = await buildSetupPayload(process.cwd());
   if (flags['print-models'] || flags.printModels) {
     output(
@@ -1528,7 +1672,7 @@ async function handleSetup(argv) {
 }
 
 async function handleWorker(argv) {
-  const { flags } = parseCommandInput(argv, []);
+  const { flags } = parseCommandArgv(argv, []);
   const cwd = typeof flags.cwd === 'string' ? flags.cwd : process.cwd();
   const jobId = typeof flags['job-id'] === 'string' ? flags['job-id'] : flags.jobId;
   if (!jobId) throw new Error('Missing required --job-id.');

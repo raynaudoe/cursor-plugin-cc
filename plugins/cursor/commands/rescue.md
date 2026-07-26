@@ -15,7 +15,7 @@ Execution mode:
 
 - If the request includes `--background`, run the `cursor:cursor-rescue` subagent in the background.
 - If the request includes `--wait`, run the `cursor:cursor-rescue` subagent in the foreground.
-- If neither flag is present, default to foreground.
+- If neither flag is present, default to foreground. A foreground run streams `[cursor] …` progress to stderr, so length alone is not a reason to background it.
 - `--background` and `--wait` are execution flags for Claude Code. Do not forward them to `task`, and do not treat them as part of the natural-language task text.
 - `--model` is a runtime-selection flag. Preserve it for the forwarded `task` call, but do not treat it as part of the natural-language task text.
 - If the request includes `--resume`, do not ask whether to continue. The user already chose.
@@ -39,9 +39,12 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" task-resume-candidate 
 Operating rules:
 
 - The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" task ...` and return that command's stdout as-is.
+- The subagent must set an explicit `timeout` of `570000` ms on that `Bash` call so the tool call outlives the runtime's own 480 s watchdog. The Bash tool caps this field at 600000 ms.
 - Return the Cursor companion stdout verbatim to the user.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
-- Do not ask the subagent to inspect files, monitor progress, poll `/cursor:status`, fetch `/cursor:result`, call `/cursor:cancel`, summarize output, or do follow-up work of its own.
+- `[cursor] …` lines on stderr are live progress, not results. Do not present them as the answer.
+- Do not ask the subagent to inspect files, fetch `/cursor:result`, call `/cursor:cancel`, summarize output, or do follow-up work of its own.
+- When the run is backgrounded, the subagent may make exactly one follow-up `cursor-companion.mjs status <job-id> --wait` call so the turn ends with Cursor's result instead of a bare job id. That is the only permitted exception.
 - Leave the model unset unless the user explicitly asks for one.
 - Leave `--resume` and `--fresh` in the forwarded request. The subagent handles that routing when it builds the `task` command.
 - If the helper reports that Cursor is missing or unauthenticated, stop and tell the user to run `/cursor:setup`.

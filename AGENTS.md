@@ -47,11 +47,15 @@ Plus a **Constraints** block that forbids: touching files outside the list, rena
 
 ## Where things live
 
+- `plugins/cursor/.claude-plugin/plugin.json` — the plugin manifest. Claude Code only discovers it here; a manifest at the plugin root fails `claude plugin validate` and its declared version is discarded.
 - `plugins/cursor/scripts/<cmd>.mjs` — command entrypoints (8) and thin wrappers around `cursor-companion.mjs`.
 - `plugins/cursor/scripts/cursor-companion.mjs` — unified runtime for setup, review, adversarial review, debate, rescue, status, result, cancel, and background workers.
+- `plugins/cursor/scripts/session-lifecycle-hook.mjs` — SessionStart/SessionEnd handler: stamps jobs with the Claude session id and reaps them when the session ends.
 - `plugins/cursor/scripts/lib/*.mjs` — shared helpers (run, id, args, paths, jobs, parse, cursor, git, invoked, md).
 - `plugins/cursor/commands/*.md` — slash command wrappers.
 - `plugins/cursor/agents/cursor-rescue.md` — the handoff subagent prompt.
+- `plugins/cursor/skills/*/SKILL.md` — internal, non-user-invocable skills. `cursor-prompting` shapes the forwarded rescue prompt and is bound to the subagent; `cursor-result-handling` governs how the main thread presents Cursor output.
+- `plugins/cursor/hooks/hooks.json` — SessionStart/SessionEnd registration. No stop-time review gate: rule 8 forbids advertising one until the Cursor runtime supports it.
 - `plugins/cursor/tests/*.test.mjs` — vitest specs + fixtures.
 - `.claude-plugin/marketplace.json` — what Claude Code's `/plugin install` reads.
 

@@ -29,7 +29,7 @@ body:
     id: plugin-version
     attributes:
       label: Plugin version
-      description: Tag or commit. From the plugin cache `cat ~/.claude/plugins/cache/tomas-cursor/cursor/*/plugin.json | grep version`.
+      description: Tag or commit. From the plugin cache `cat ~/.claude/plugins/cache/cursor-plugin-cc/cursor/*/.claude-plugin/plugin.json | grep version`.
       placeholder: v0.2.0
     validations:
       required: true
@@ -47,9 +47,9 @@ body:
       required: true
 
   - type: textarea
-    id: doctor
+    id: setup-output
     attributes:
-      label: Output of `/cursor:setup --doctor`
+      label: Output of `/cursor:setup`
       description: Paste the full block. Mask the CURSOR_API_KEY if it is shown.
       render: markdown
     validations:
@@ -61,7 +61,7 @@ body:
       label: Steps to reproduce
       description: Exact slash commands you ran, in order.
       placeholder: |
-        1. `/cursor:delegate "write a haiku"`
+        1. `/cursor:rescue "write a haiku"`
         2. Got this error: …
     validations:
       required: true
@@ -79,7 +79,7 @@ body:
   - type: input
     id: job-id
     attributes:
-      label: Job id (if the failure was inside /cursor:delegate or /cursor:browser)
+      label: Job id (if the failure was inside /cursor:rescue, /cursor:review, or /cursor:debate)
       description: From `/cursor:status` — we'll ask for the raw log at `~/.cursor-plugin-cc/jobs/<repo-hash>/logs/<job-id>.ndjson` if needed.
       placeholder: XUE20Qpnu2
 

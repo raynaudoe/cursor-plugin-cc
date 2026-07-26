@@ -4,12 +4,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   cancelJob,
   createJob,
+  currentSessionId,
+  filterForSession,
   findRunningJobs,
   jobFilePath,
   listJobs,
   mostRecentFinishedJob,
   pruneOlderThanDays,
   readJob,
+  SESSION_ID_ENV,
   updateJob,
 } from '../scripts/lib/jobs.mjs';
 import { makeTempHome } from './helpers.mjs';
@@ -67,7 +70,7 @@ describe('jobs registry', () => {
     expect(readJob(repo, 'new')).not.toBeNull();
   });
 
-  it('cancelJob SIGTERMs a live pid and marks cancelled', async () => {
+  it('cancelJob SIGTERMs a live background worker pid and marks cancelled', async () => {
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
       stdio: 'ignore',
       detached: false,
@@ -75,9 +78,13 @@ describe('jobs registry', () => {
     try {
       await new Promise((r) => setTimeout(r, 50));
       createJob({ id: 'live', repoPath: repo, prompt: 'p', model: 'm' });
-      updateJob(repo, 'live', { pid: child.pid });
+      // `background: true` is required: cancelJob only signals `job.pid` for
+      // background workers, because on a foreground run that pid is the
+      // companion itself.
+      updateJob(repo, 'live', { pid: child.pid, background: true });
       const cancelled = await cancelJob(repo, 'live', 500);
       expect(cancelled?.status).toBe('cancelled');
+      expect(cancelled?.cancelSignalled).toBe(true);
     } finally {
       if (!child.killed) child.kill('SIGKILL');
     }
@@ -99,5 +106,99 @@ describe('jobs registry', () => {
     updateJob(repo, 'done1', { status: 'completed' });
     const res = await cancelJob(repo, 'done1');
     expect(res?.status).toBe('completed');
+  });
+
+  it('cancelJob reaps the cursor-agent process group, not just the direct child', async () => {
+    // A detached `sh` that spawns a sleeping grandchild: the shape cursor-agent
+    // creates when it shells out to run tests. A bare pid kill leaves the
+    // grandchild running.
+    const child = spawn('sh', ['-c', 'sleep 30 & wait'], { detached: true, stdio: 'ignore' });
+    try {
+      await new Promise((r) => setTimeout(r, 50));
+      createJob({ id: 'tree', repoPath: repo, prompt: 'p', model: 'm' });
+      updateJob(repo, 'tree', { agentPid: child.pid });
+      const cancelled = await cancelJob(repo, 'tree', 2_000);
+      expect(cancelled?.status).toBe('cancelled');
+      expect(cancelled?.cancelSignalled).toBe(true);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(() => process.kill(child.pid, 0)).toThrow();
+    } finally {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        // already reaped
+      }
+    }
+  });
+
+  it('cancelJob reports when there was no live process to signal', async () => {
+    createJob({ id: 'stale', repoPath: repo, prompt: 'p', model: 'm' });
+    const cancelled = await cancelJob(repo, 'stale', 100);
+    expect(cancelled?.status).toBe('cancelled');
+    expect(cancelled?.cancelSignalled).toBe(false);
+  });
+
+  it('never group-signals a foreground job pid', async () => {
+    // On a foreground run `job.pid` is the companion itself, sharing the caller's
+    // process group. Group-signalling it would kill the Bash tool that invoked us.
+    createJob({ id: 'fg', repoPath: repo, prompt: 'p', model: 'm' });
+    updateJob(repo, 'fg', { pid: process.pid });
+    const cancelled = await cancelJob(repo, 'fg', 100);
+    expect(cancelled?.status).toBe('cancelled');
+    expect(cancelled?.cancelSignalled).toBe(false);
+  });
+});
+
+describe('session scoping', () => {
+  let home;
+  let repo;
+  const prevSession = process.env[SESSION_ID_ENV];
+
+  beforeEach(() => {
+    home = makeTempHome();
+    process.env.CURSOR_PLUGIN_CC_HOME = home.dir;
+    repo = '/tmp/session-repo';
+    delete process.env[SESSION_ID_ENV];
+  });
+
+  afterEach(() => {
+    home.cleanup();
+    delete process.env.CURSOR_PLUGIN_CC_HOME;
+    if (prevSession === undefined) delete process.env[SESSION_ID_ENV];
+    else process.env[SESSION_ID_ENV] = prevSession;
+  });
+
+  it('stamps the session id from the environment', () => {
+    process.env[SESSION_ID_ENV] = 'sess-a';
+    createJob({ id: 'a1', repoPath: repo, prompt: 'p', model: 'm' });
+    expect(readJob(repo, 'a1')?.sessionId).toBe('sess-a');
+  });
+
+  it('omits the field entirely when the hook has not run', () => {
+    createJob({ id: 'n1', repoPath: repo, prompt: 'p', model: 'm' });
+    expect(readJob(repo, 'n1')).not.toHaveProperty('sessionId');
+    expect(currentSessionId({})).toBeNull();
+  });
+
+  it('hides other sessions but keeps this one and pre-hook records', () => {
+    process.env[SESSION_ID_ENV] = 'sess-a';
+    createJob({ id: 'mine', repoPath: repo, prompt: 'p', model: 'm' });
+    process.env[SESSION_ID_ENV] = 'sess-b';
+    createJob({ id: 'theirs', repoPath: repo, prompt: 'p', model: 'm' });
+    delete process.env[SESSION_ID_ENV];
+    createJob({ id: 'legacy', repoPath: repo, prompt: 'p', model: 'm' });
+
+    process.env[SESSION_ID_ENV] = 'sess-a';
+    const visible = filterForSession(listJobs(repo))
+      .map((job) => job.id)
+      .sort();
+    expect(visible).toEqual(['legacy', 'mine']);
+  });
+
+  it('degrades to showing everything when the session id is unknown', () => {
+    process.env[SESSION_ID_ENV] = 'sess-a';
+    createJob({ id: 'mine', repoPath: repo, prompt: 'p', model: 'm' });
+    delete process.env[SESSION_ID_ENV];
+    expect(filterForSession(listJobs(repo))).toHaveLength(1);
   });
 });

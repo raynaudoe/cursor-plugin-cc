@@ -7,8 +7,13 @@
   "plugins": [
     {
       "name": "cursor",
+      "version": "0.3.2",
       "source": "./plugins/cursor",
       "description": "Use Cursor CLI from Claude Code to review code or delegate rescue work.",
+      "author": {
+        "name": "ez",
+        "url": "https://github.com/raynaudoe/cursor-plugin-cc"
+      },
       "strict": false
     }
   ]
