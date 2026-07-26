@@ -64,9 +64,11 @@ async function reapSessionJobs(cwd, sessionId) {
   for (const job of listJobs(root)) {
     if (job.sessionId !== sessionId) continue;
     if (!isActiveStatus(job.status)) continue;
-    // cursor-agent leads its own process group, so this also reaps the shell
-    // commands it spawned. The worker is signalled by bare pid: group-signalling
-    // it could reach processes we do not own.
+    // Both pids lead their own process group — cursor-agent via runHeadless and
+    // the worker via spawnWorker, each spawned detached — so group-signalling
+    // reaps the shell commands they spawned without reaching anything we do not
+    // own. SIGTERM here is a request; escalate() SIGKILLs whatever survives.
+    //
     // `pid > 0` is load-bearing throughout: a failed spawn can persist a
     // non-positive pid, and process.kill(-1, sig) broadcasts to every process
     // this user owns.
