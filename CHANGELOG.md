@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.4.0 - 2026-07-26
+
+Read-only reviews, session lifecycle, subagent parity.
 
 ### Fixed
 
@@ -28,7 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Default run watchdog is now 480 s (was 1800 s).** Override with `--timeout <seconds>`. The old default outlived the Claude Code Bash tool budget, which turned a foreground delegation into a backgrounded shell. The budget is now ordered 480 s watchdog < 570 s Bash timeout < 600 s tool ceiling.
 - **Plugin manifest moved to `plugins/cursor/.claude-plugin/plugin.json`.** Claude Code only discovers it there; at the plugin root `claude plugin validate` exits 1 and the declared version is discarded.
-
 - **Public command surface now matches the Codex companion shape plus Cursor debate.** The exposed commands are `/cursor:review`, `/cursor:adversarial-review`, `/cursor:debate`, `/cursor:rescue`, `/cursor:status`, `/cursor:result`, `/cursor:cancel`, and `/cursor:setup`.
 - **Added `/cursor:debate`.** The new command runs a read-only two-model Cursor consensus debate with model alias resolution, up to 5 rounds, early consensus stopping, background job support, and stored transcript results.
 - **Slash command prompts now mirror the Codex plugin style.** Prompt markdown is ported from the upstream command shape with Cursor-safe substitutions and without unsupported Codex-only controls.

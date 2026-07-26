@@ -1,6 +1,6 @@
 {
   "name": "cursor",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Use Cursor CLI from Claude Code to review code or delegate rescue work.",
   "author": {
     "name": "ez",
