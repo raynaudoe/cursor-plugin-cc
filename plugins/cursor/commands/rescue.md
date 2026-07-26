@@ -39,7 +39,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" task-resume-candidate 
 Operating rules:
 
 - The subagent is a thin forwarder only. It should use one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" task ...` and return that command's stdout as-is.
-- The subagent must set an explicit `timeout` of `660000` ms on that `Bash` call so the tool call outlives the runtime's own 600 s watchdog.
+- The subagent must set an explicit `timeout` of `570000` ms on that `Bash` call so the tool call outlives the runtime's own 480 s watchdog. The Bash tool caps this field at 600000 ms.
 - Return the Cursor companion stdout verbatim to the user.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
 - `[cursor] …` lines on stderr are live progress, not results. Do not present them as the answer.

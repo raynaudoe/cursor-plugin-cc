@@ -159,7 +159,7 @@ describe('slash command surface', () => {
     // Without this the 120 s default budget backgrounds the shell and the user
     // is handed a shell id instead of Cursor's answer.
     for (const source of [readAgent('cursor-rescue.md'), readCommand('rescue.md')]) {
-      expect(source).toMatch(/660000/);
+      expect(source).toMatch(/570000/);
     }
   });
 

@@ -1,10 +1,12 @@
 import { writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  BASH_TIMEOUT_CEILING_MS,
   collapseCommandArgv,
   DEFAULT_TIMEOUT_SEC,
   parseArgv,
   parseTimeout,
+  RESCUE_BASH_TIMEOUT_MS,
   splitArgString,
 } from '../scripts/lib/args.mjs';
 import { id } from '../scripts/lib/id.mjs';
@@ -66,10 +68,14 @@ describe('args hardening', () => {
     expect(parseTimeout(false)).toBe(DEFAULT_TIMEOUT_SEC);
   });
 
-  it('the default timeout stays under the Bash tool budget the rescue agent sets', () => {
-    // agents/cursor-rescue.md pins a 660000 ms Bash timeout; the runtime watchdog
-    // must fire first so the tool call returns a result rather than being killed.
-    expect(DEFAULT_TIMEOUT_SEC * 1000).toBeLessThan(660_000);
+  it('keeps the whole timeout budget under the Bash tool ceiling', () => {
+    // The Bash tool rejects `timeout` above 600000 ms, so the chain has to be
+    // strictly ordered: the runtime watchdog fires first and still has time to
+    // render a result, and the Bash timeout stays legal.
+    expect(RESCUE_BASH_TIMEOUT_MS).toBeLessThan(BASH_TIMEOUT_CEILING_MS);
+    expect(DEFAULT_TIMEOUT_SEC * 1000).toBeLessThan(RESCUE_BASH_TIMEOUT_MS);
+    // Enough headroom for the runtime to finish writing its result.
+    expect(RESCUE_BASH_TIMEOUT_MS - DEFAULT_TIMEOUT_SEC * 1000).toBeGreaterThanOrEqual(60_000);
   });
 
   it('collapseCommandArgv splits the post -- string with quote handling', () => {

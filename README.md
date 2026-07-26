@@ -106,6 +106,10 @@ Foreground runs stream progress to stderr as `[cursor] …` lines while Cursor w
 
 Jobs are stamped with the Claude Code session id, so `/cursor:status` shows this session's work rather than every job ever recorded for the repository. When the session ends, any still-running Cursor job is reaped rather than left orphaned.
 
+A single run is capped at **480 seconds** by default. Override it with `--timeout <seconds>` on any command. The default is deliberately below the Claude Code Bash tool's 600 s ceiling so the runtime hits its own watchdog and still has time to render a result, rather than the tool call being killed first and the delegation turning into a detached shell.
+
+Because no write-blocking mode allows shell, a review whose diff is too large to inline is written to a file under `~/.cursor-plugin-cc/jobs/<repo-hash>/logs/` and the prompt points Cursor at it. Without that, a review of three or more files would see file names and current contents but never the base versions.
+
 ## Development
 
 ```bash

@@ -19,10 +19,10 @@ Selection guidance:
 Forwarding rules:
 
 - Use exactly one `Bash` call to invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" task ...`.
-- Always set an explicit `timeout` of `660000` ms on that `Bash` call. The runtime's own watchdog stops a run at 600 s, so the tool call must be allowed to outlive it. Leaving the default 120 s budget in place makes Claude Code background the shell and hand the user a shell id instead of Cursor's answer.
+- Always set an explicit `timeout` of `570000` ms on that `Bash` call. The runtime's own watchdog stops a run at 480 s, so the tool call outlives it with headroom to render the result. The Bash tool rejects anything above 600000 ms, so do not raise it. Leaving the default 120 s budget in place makes Claude Code background the shell and hand the user a shell id instead of Cursor's answer.
 - Default to foreground. Only use `--background` when the user explicitly asked for it.
 - Do not infer background execution from task size, complexity, or expected duration. A foreground run streams `[cursor] …` progress to stderr while it works, so a long run is visible rather than silent.
-- If the user explicitly asked for `--background`, make the `task --background` call and then make exactly one follow-up `Bash` call to `node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" status <job-id> --wait` so the turn ends with Cursor's actual result rather than a bare job id. Set `timeout` to `660000` ms on that call too.
+- If the user explicitly asked for `--background`, make the `task --background` call and then make exactly one follow-up `Bash` call to `node "${CLAUDE_PLUGIN_ROOT}/scripts/cursor-companion.mjs" status <job-id> --wait` so the turn ends with Cursor's actual result rather than a bare job id. Set `timeout` to `570000` ms on that call too.
 - You may use the `cursor-prompting` skill only to tighten the user's request into a better Cursor task prompt before forwarding it.
 - Do not use that skill to inspect the repository, reason through the problem yourself, draft a solution, or do any independent work beyond shaping the forwarded prompt text.
 - Do not inspect the repository, read files, grep, monitor progress, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.

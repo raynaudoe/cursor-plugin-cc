@@ -211,12 +211,22 @@ export function parseCommandArgv(rawArgv, booleans = []) {
   return parseArgv(collapseCommandArgv(rawArgv), booleans);
 }
 
-// Default watchdog for a single cursor-agent run, in seconds. Deliberately kept
-// under the Claude Code Bash tool's own budget: a runtime cap that outlives the
-// tool call waiting on it turns a foreground delegation into a backgrounded
-// shell, which is exactly what makes the plugin feel like an external console
-// process rather than a subagent.
-export const DEFAULT_TIMEOUT_SEC = 600;
+// Default watchdog for a single cursor-agent run, in seconds.
+//
+// The Claude Code Bash tool caps `timeout` at 600000 ms, so the whole budget has
+// to fit under that ceiling with headroom: the runtime must hit its own watchdog
+// and still have time to render a result before the tool call is killed. A cap
+// that outlives the tool call waiting on it turns a foreground delegation into a
+// backgrounded shell, which is what made the plugin feel like a console process.
+//
+//   480s watchdog  <  570s Bash timeout  <  600s tool ceiling
+export const DEFAULT_TIMEOUT_SEC = 480;
+
+// What the rescue prompts must pass as the Bash `timeout`, in milliseconds.
+export const RESCUE_BASH_TIMEOUT_MS = 570_000;
+
+// Hard ceiling enforced by the Bash tool itself.
+export const BASH_TIMEOUT_CEILING_MS = 600_000;
 
 /**
  * Normalise a `--timeout` flag value (which may be a number, a numeric string,

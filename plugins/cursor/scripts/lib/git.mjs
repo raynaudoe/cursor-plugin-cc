@@ -171,7 +171,8 @@ function untrackedSection(cwd, files) {
  * @property {string} [body]       Markdown diff context for the prompt.
  * @property {string[]} [changedFiles]
  * @property {boolean} [truncated]
- * @property {'inline-diff'|'self-collect'} [inputMode]
+ * @property {'inline-diff'|'diff-file'} [inputMode]
+ * @property {string} [fullDiff]   Set when the diff was too large to inline.
  * @property {string} [collectionGuidance]
  * @property {boolean} [isEmpty]   True when there is nothing to review.
  * @property {string} [error]      Set when the target could not be resolved.
@@ -250,10 +251,12 @@ export async function collectReviewContext(cwd, opts = {}) {
       body,
       changedFiles,
       truncated,
-      inputMode: includeDiff ? 'inline-diff' : 'self-collect',
-      collectionGuidance: includeDiff
-        ? 'Use the inline diff below as primary evidence.'
-        : 'The context below is a lightweight summary. Read the changed files directly before finalizing. Read-only runs cannot execute shell commands, so use file reads rather than git.',
+      inputMode: includeDiff ? 'inline-diff' : 'diff-file',
+      // A diff too large to inline is handed back so the caller can persist it
+      // somewhere the agent can open. Read-only runs have no shell, so without
+      // this a multi-file review sees file names and current contents but never
+      // the base versions, ie. never what actually changed.
+      ...(includeDiff ? {} : { fullDiff: rawDiff }),
       isEmpty: false,
     };
   }
@@ -291,10 +294,8 @@ export async function collectReviewContext(cwd, opts = {}) {
     body,
     changedFiles,
     truncated,
-    inputMode: includeDiff ? 'inline-diff' : 'self-collect',
-    collectionGuidance: includeDiff
-      ? 'Use the inline diff below as primary evidence.'
-      : 'The context below is a lightweight summary. Read the changed files directly before finalizing. Read-only runs cannot execute shell commands, so use file reads rather than git.',
+    inputMode: includeDiff ? 'inline-diff' : 'diff-file',
+    ...(includeDiff ? {} : { fullDiff: rawDiff }),
     isEmpty: false,
   };
 }

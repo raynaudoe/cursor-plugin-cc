@@ -33,25 +33,51 @@ function publishSessionId(sessionId) {
   appendFileSync(envFile, `export ${SESSION_ID_ENV}=${shellEscape(sessionId)}\n`, 'utf8');
 }
 
+// SIGTERM is only a request. Anything still alive after a short grace gets
+// SIGKILL, mirroring cancelJob — otherwise a process that ignores SIGTERM keeps
+// consuming quota while its now-terminal record blocks any later cleanup.
+const KILL_GRACE_MS = 2_000;
+
+async function escalate(pids) {
+  if (pids.length === 0) return;
+  await new Promise((resolve) => setTimeout(resolve, KILL_GRACE_MS));
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      continue; // Already exited.
+    }
+    try {
+      killTree(pid, 'SIGKILL');
+    } catch {
+      // Raced with exit.
+    }
+  }
+}
+
 async function reapSessionJobs(cwd, sessionId) {
   if (!sessionId) return;
   if (!(await isGitRepo(cwd))) return;
   const root = await repoRoot(cwd);
+  /** @type {number[]} */
+  const pendingKills = [];
   for (const job of listJobs(root)) {
     if (job.sessionId !== sessionId) continue;
     if (!isActiveStatus(job.status)) continue;
     // cursor-agent leads its own process group, so this also reaps the shell
     // commands it spawned. The worker is signalled by bare pid: group-signalling
     // it could reach processes we do not own.
-    if (typeof job.agentPid === 'number') {
+    // `pid > 0` is load-bearing throughout: a failed spawn can persist a
+    // non-positive pid, and process.kill(-1, sig) broadcasts to every process
+    // this user owns.
+    if (Number.isInteger(job.agentPid) && job.agentPid > 0) {
       try {
         killTree(job.agentPid, 'SIGTERM');
+        pendingKills.push(job.agentPid);
       } catch {
         // Already gone.
       }
     }
-    // `job.pid > 0` is load-bearing: a failed spawn can persist a non-positive
-    // pid, and process.kill(-1, sig) broadcasts to every process this user owns.
     if (
       Number.isInteger(job.pid) &&
       job.pid > 0 &&
@@ -60,6 +86,7 @@ async function reapSessionJobs(cwd, sessionId) {
     ) {
       try {
         process.kill(job.pid, 'SIGTERM');
+        pendingKills.push(job.pid);
       } catch {
         // Already gone.
       }
@@ -71,6 +98,7 @@ async function reapSessionJobs(cwd, sessionId) {
       summary: 'Cancelled because the Claude Code session ended.',
     });
   }
+  await escalate(pendingKills);
 }
 
 async function main() {

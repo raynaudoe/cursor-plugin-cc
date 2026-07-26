@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { closeSync, openSync } from 'node:fs';
+import { closeSync, openSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseCommandArgv, parseTimeout } from './lib/args.mjs';
 import {
@@ -28,7 +29,10 @@ import { ensureDir, jobsDir, logsDir, pluginHome } from './lib/paths.mjs';
 import { chatIdFromEvent, extractChatId, summariseEvents, walkToolUses } from './lib/parse.mjs';
 import { run } from './lib/run.mjs';
 
-const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240_000;
+// Must exceed the runtime watchdog (DEFAULT_TIMEOUT_SEC) or `status --wait`
+// gives up before the job it is waiting on can possibly finish, while still
+// fitting inside the Bash timeout the rescue prompts set.
+const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 540_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_CONTINUE_PROMPT =
   'Continue from the current Cursor chat state. Pick the next highest-value step and follow through until the task is resolved.';
@@ -243,12 +247,18 @@ function renderStatusReport(repo, { all = false } = {}) {
 function renderSingleJob(job) {
   const lines = ['# Cursor Job Status', ''];
   pushJobDetails(lines, job, { showLog: true, showReviewHint: true });
-  if (job.prompt) {
-    lines.push('', 'Prompt:', '', job.prompt);
+  // A finished job's status page must carry its actual output. `status --wait`
+  // is how a backgrounded rescue delivers Cursor's answer, and without this it
+  // returned everything except the answer.
+  if (!isActiveStatus(job.status) && job.resultText) {
+    lines.push('', 'Result:', '', String(job.resultText).trim());
   }
   if (job.filesTouched?.length) {
     lines.push('', 'Files touched:');
     for (const file of job.filesTouched) lines.push(`- ${file}`);
+  }
+  if (job.prompt) {
+    lines.push('', 'Prompt:', '', job.prompt);
   }
   return `${lines.join('\n').trimEnd()}\n`;
 }
@@ -668,13 +678,25 @@ function renderDebateReport({ request, turns, consensusReached, warnings = [] })
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
-function buildReviewPrompt({ context, adversarial = false, focusText = '' }) {
+// Read-only runs have no shell, so the agent cannot recover base versions or
+// deleted content on its own. When the diff did not fit inline, point it at the
+// file instead: the read tool still works in `--mode ask`.
+function diffSourceGuidance(context, diffPath) {
+  if (diffPath) {
+    return `The complete diff is written to ${diffPath}. Read that file first — it is the authoritative record of what changed. You cannot run shell commands, so do not attempt to reconstruct the diff with git.`;
+  }
+  if (context.inputMode === 'inline-diff') return 'Use the inline diff below as primary evidence.';
+  return context.collectionGuidance ?? '';
+}
+
+function buildReviewPrompt({ context, adversarial = false, focusText = '', diffPath = null }) {
+  const guidance = diffSourceGuidance(context, diffPath);
   if (!adversarial) {
     return [
       'You are a senior code reviewer.',
       '',
       `Review target: ${context.label}`,
-      context.collectionGuidance ? `Context mode: ${context.collectionGuidance}` : '',
+      guidance ? `Context mode: ${guidance}` : '',
       '',
       'Review ONLY the changes below, not the entire codebase.',
       '',
@@ -688,7 +710,7 @@ function buildReviewPrompt({ context, adversarial = false, focusText = '' }) {
       '',
       'Hard constraints:',
       '- This is a READ-ONLY review. Do not modify, create, delete, stage, or commit files.',
-      '- If the diff context is lightweight or truncated, inspect specific files or git diff output read-only before finalizing.',
+      '- You cannot run shell commands. Use file reads for any extra context you need.',
     ].join('\n');
   }
 
@@ -701,13 +723,13 @@ function buildReviewPrompt({ context, adversarial = false, focusText = '' }) {
     '<task>',
     `Review target: ${context.label}`,
     `User focus: ${focusText || 'No extra focus provided.'}`,
-    context.collectionGuidance ? `Context mode: ${context.collectionGuidance}` : '',
+    guidance ? `Context mode: ${guidance}` : '',
     'Review the provided repository context and challenge whether this change should ship.',
     '</task>',
     '',
     '<review_method>',
     'Prioritize correctness, security, data loss, rollback safety, race conditions, stale state, version skew, and missing observability.',
-    'If the context is lightweight or truncated, inspect the target diff yourself with read-only commands before finalizing.',
+    'You cannot run shell commands. Use file reads for any extra context you need.',
     '</review_method>',
     '',
     '<structured_output_contract>',
@@ -1031,6 +1053,16 @@ async function runDebateRequest(root, jobId, request, options = {}) {
   };
 }
 
+// Persisted next to the job logs so it lives under the documented
+// ~/.cursor-plugin-cc/jobs/<repo-hash>/ layout and is swept by the same pruning.
+function writeDiffFile(root, diff) {
+  if (typeof diff !== 'string' || diff.length === 0) return null;
+  ensureDir(logsDir(root));
+  const path = join(logsDir(root), `${newId(10)}.diff`);
+  writeFileSync(path, diff, 'utf8');
+  return path;
+}
+
 function createTrackedJob(root, request, status = 'running') {
   const jobId = newId(10);
   // `prompt` is already a top-level column; keeping a second copy inside
@@ -1204,7 +1236,12 @@ async function buildReviewRequest(root, flags, adversarial) {
     title: adversarial ? 'Cursor Adversarial Review' : 'Cursor Review',
     targetLabel: context.label,
     initialSummary: `${adversarial ? 'Adversarial review' : 'Review'} ${context.label}`,
-    prompt: buildReviewPrompt({ context, adversarial, focusText: flags.focusText }),
+    prompt: buildReviewPrompt({
+      context,
+      adversarial,
+      focusText: flags.focusText,
+      diffPath: writeDiffFile(root, context.fullDiff),
+    }),
     model: flags.model,
     // Review commands promise the user they will not change anything. Enforce it
     // at the CLI rather than trusting the prompt.
