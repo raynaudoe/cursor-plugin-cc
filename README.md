@@ -51,16 +51,16 @@ If setup reports Cursor is missing, install the CLI from <https://cursor.com/ins
 
 ## Commands
 
-| Command | What It Does | Common Examples |
-| --- | --- | --- |
-| `/cursor:review` | Read-only review of the current git work. Dirty trees use the working tree; clean trees use a branch diff. | `/cursor:review`<br>`/cursor:review --base main`<br>`/cursor:review --model opus --background` |
-| `/cursor:adversarial-review` | Read-only challenge review focused on risks, assumptions, and failure modes. Accepts focus text. | `/cursor:adversarial-review`<br>`/cursor:adversarial-review --base main challenge the retry design` |
-| `/cursor:debate` | Two Cursor models debate an issue for up to 5 rounds and store a consensus report. | `/cursor:debate should we add this API boundary?`<br>`/cursor:debate --models gemini,composer --rounds 3 evaluate this architecture` |
-| `/cursor:rescue` | Delegate investigation, a fix request, or follow-up work to Cursor. | `/cursor:rescue investigate why tests fail`<br>`/cursor:rescue --model composer fix the issue quickly`<br>`/cursor:rescue --background investigate the regression` |
-| `/cursor:status` | Show active and recent Cursor jobs for this repo. | `/cursor:status`<br>`/cursor:status <job-id> --wait` |
-| `/cursor:result` | Show the stored final output for a finished job. | `/cursor:result`<br>`/cursor:result <job-id>` |
-| `/cursor:cancel` | Cancel an active Cursor job. | `/cursor:cancel`<br>`/cursor:cancel <job-id>` |
-| `/cursor:setup` | Check Cursor CLI, auth, models, and configured MCPs. | `/cursor:setup`<br>`/cursor:setup --print-models` |
+| Command                      | What It Does                                                                                               | Common Examples                                                                                                                                                    |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/cursor:review`             | Read-only review of the current git work. Dirty trees use the working tree; clean trees use a branch diff. | `/cursor:review`<br>`/cursor:review --base main`<br>`/cursor:review --model opus --background`                                                                     |
+| `/cursor:adversarial-review` | Read-only challenge review focused on risks, assumptions, and failure modes. Accepts focus text.           | `/cursor:adversarial-review`<br>`/cursor:adversarial-review --base main challenge the retry design`                                                                |
+| `/cursor:debate`             | Two Cursor models debate an issue for up to 5 rounds and store a consensus report.                         | `/cursor:debate should we add this API boundary?`<br>`/cursor:debate --models gemini,composer --rounds 3 evaluate this architecture`                               |
+| `/cursor:rescue`             | Delegate investigation, a fix request, or follow-up work to Cursor.                                        | `/cursor:rescue investigate why tests fail`<br>`/cursor:rescue --model composer fix the issue quickly`<br>`/cursor:rescue --background investigate the regression` |
+| `/cursor:status`             | Show active and recent Cursor jobs for this repo.                                                          | `/cursor:status`<br>`/cursor:status <job-id> --wait`                                                                                                               |
+| `/cursor:result`             | Show the stored final output for a finished job.                                                           | `/cursor:result`<br>`/cursor:result <job-id>`                                                                                                                      |
+| `/cursor:cancel`             | Cancel an active Cursor job.                                                                               | `/cursor:cancel`<br>`/cursor:cancel <job-id>`                                                                                                                      |
+| `/cursor:setup`              | Check Cursor CLI, auth, models, and configured MCPs.                                                       | `/cursor:setup`<br>`/cursor:setup --print-models`                                                                                                                  |
 
 ## Models
 
@@ -109,6 +109,8 @@ Jobs are stamped with the Claude Code session id, so `/cursor:status` shows this
 A single run is capped at **480 seconds** by default. Override it with `--timeout <seconds>` on any command. The default is deliberately below the Claude Code Bash tool's 600 s ceiling so the runtime hits its own watchdog and still has time to render a result, rather than the tool call being killed first and the delegation turning into a detached shell.
 
 Because no write-blocking mode allows shell, a review whose diff is too large to inline is written to a file under `~/.cursor-plugin-cc/jobs/<repo-hash>/logs/` and the prompt points Cursor at it. Without that, a review of three or more files would see file names and current contents but never the base versions.
+
+Job records, raw stream logs and those diff files are pruned after **30 days** when a Claude Code session ends. A large review diff can be ~100 KB, so without pruning the directory would grow for the lifetime of the machine. Anything newer than the cutoff is kept, and a job cancelled during shutdown is always kept because that write refreshes it.
 
 ## Development
 

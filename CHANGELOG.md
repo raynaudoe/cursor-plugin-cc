@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Session lifecycle hooks.** `SessionStart` stamps jobs with the Claude session id and `SessionEnd` reaps anything still running, escalating to SIGKILL. Previously detached workers outlived Claude Code, and `/cursor:status` listed every job ever recorded for the repository.
 - **Live progress.** Foreground runs stream `[cursor] …` to stderr while Cursor works. stdout stays the verbatim payload and `--json` suppresses the feed.
 - **Two internal skills**, `cursor-prompting` and `cursor-result-handling`.
+- **Job state is now pruned.** `SessionEnd` removes job records, stream logs and review diff files older than 30 days. Nothing previously deleted any of it, and the new diff files are ~100 KB each for a large review, so the directory grew without bound.
 
 ### Changed
 

@@ -8,11 +8,24 @@
 //
 // SessionEnd reaps whatever is still running. Background workers are spawned
 // detached, so nothing else would ever stop them — they outlive Claude Code and
-// keep burning Cursor quota against a session that no longer exists.
+// keep burning Cursor quota against a session that no longer exists. It then
+// prunes aged job state, which is the only thing that ever removes it.
 import { appendFileSync, readFileSync } from 'node:fs';
 import { isGitRepo, repoRoot } from './lib/git.mjs';
-import { isActiveStatus, listJobs, SESSION_ID_ENV, updateJob } from './lib/jobs.mjs';
+import {
+  isActiveStatus,
+  listJobs,
+  pruneOlderThanDays,
+  SESSION_ID_ENV,
+  updateJob,
+} from './lib/jobs.mjs';
 import { killTree } from './lib/run.mjs';
+
+// Job records, raw NDJSON streams and review diff files all live under
+// jobs/<repo-hash>/. A single review diff can be ~100 KB, and nothing else in
+// the plugin ever deletes any of it, so without this the directory grows for the
+// lifetime of the machine.
+const RETENTION_DAYS = 30;
 
 function readHookInput() {
   try {
@@ -55,10 +68,8 @@ async function escalate(pids) {
   }
 }
 
-async function reapSessionJobs(cwd, sessionId) {
+async function reapSessionJobs(root, sessionId) {
   if (!sessionId) return;
-  if (!(await isGitRepo(cwd))) return;
-  const root = await repoRoot(cwd);
   /** @type {number[]} */
   const pendingKills = [];
   for (const job of listJobs(root)) {
@@ -112,8 +123,19 @@ async function main() {
     publishSessionId(sessionId);
     return;
   }
-  if (event === 'SessionEnd') {
-    await reapSessionJobs(input.cwd || process.cwd(), sessionId);
+  if (event !== 'SessionEnd') return;
+
+  const cwd = input.cwd || process.cwd();
+  if (!(await isGitRepo(cwd))) return;
+  const root = await repoRoot(cwd);
+
+  await reapSessionJobs(root, sessionId);
+  // Housekeeping runs even when there was no session id to reap against, and
+  // must never take the session down with it.
+  try {
+    pruneOlderThanDays(root, RETENTION_DAYS);
+  } catch {
+    // Best effort. A failed prune is not worth surfacing at shutdown.
   }
 }
 
